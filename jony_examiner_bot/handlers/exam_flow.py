@@ -125,7 +125,7 @@ async def choose_midterm(callback: CallbackQuery, state: FSMContext):
 async def get_unit_name(message: Message, state: FSMContext):
     await state.update_data(test_name=message.text)
     await state.set_state(ExamStates.unit_level_name)
-    await message.answer("Daraja nomini kiriting (masalan: NOVA):")
+    await message.answer("Guruh nomini kiriting (masalan: NOVA yoki Bornleaders25):")
 
 
 @router.message(ExamStates.unit_level_name)
@@ -152,7 +152,7 @@ async def get_unit_max_score(message: Message, state: FSMContext):
 async def get_midterm_name(message: Message, state: FSMContext):
     await state.update_data(test_name=message.text)
     await state.set_state(ExamStates.midterm_level_name)
-    await message.answer("Daraja nomini kiriting (masalan: PRIME):")
+    await message.answer("Guruh nomini kiriting (masalan: PRIME yoki Bornleaders25):")
 
 
 @router.message(ExamStates.midterm_level_name)
