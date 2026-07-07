@@ -27,6 +27,20 @@ def status_color(status: str) -> str:
     return mapping.get(status, "FFFFFF")
 
 
+def group_index_color(percent: float) -> str:
+    """GROUP INDEX foizini asl baholash shkalasi (FAIL/BAD/AVERAGE/GOOD/EXCELLENT)
+    ranglariga moslashtirib bo'yaydi, test turidan qat'i nazar."""
+    if percent >= 95:
+        return GREEN_DARK
+    if percent >= 84:
+        return GREEN_LIGHT
+    if percent >= 73:
+        return BLUE_LIGHT
+    if percent >= 64:
+        return YELLOW
+    return RED
+
+
 def _cell(ws, row, col, value, bold=False, fill=None, align="center", size=11, font_color=None):
     c = ws.cell(row=row, column=col, value=value)
     c.font = Font(bold=bold, size=size, color=font_color)
@@ -83,23 +97,25 @@ def build_excel(data: dict, filepath: str):
     # Test type / section header row
     if is_unit:
         _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
         _cell(ws, r, 2, data["level_name"], bold=True)
-        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=n_cols)
-        _cell(ws, r, 3, str(data["max_score"]), bold=True)
+        ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=n_cols)
+        _cell(ws, r, 4, str(data["max_score"]), bold=True)
         r += 1
 
         headers = ["#", "SURNAME", "NAME", "TOTAL", "PERCENT", "STATUS"]
     else:
         sec = data["sections"]
         _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
         _cell(ws, r, 2, data["level_name"], bold=True)
-        _cell(ws, r, 3, sec["listening"], bold=True)
-        _cell(ws, r, 4, sec["reading"], bold=True)
-        _cell(ws, r, 5, sec["writing"], bold=True)
-        _cell(ws, r, 6, sec["speaking"], bold=True)
+        _cell(ws, r, 4, sec["listening"], bold=True)
+        _cell(ws, r, 5, sec["reading"], bold=True)
+        _cell(ws, r, 6, sec["writing"], bold=True)
+        _cell(ws, r, 7, sec["speaking"], bold=True)
         total_max = sum(sec.values())
-        ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=n_cols)
-        _cell(ws, r, 7, total_max, bold=True)
+        ws.merge_cells(start_row=r, start_column=8, end_row=r, end_column=9)
+        _cell(ws, r, 8, total_max, bold=True)
         r += 1
 
         headers = ["#", "SURNAME", "NAME", "LISTENING", "READING", "WRITING", "SPEAKING", "TOTAL", "STATUS"]
@@ -109,7 +125,7 @@ def build_excel(data: dict, filepath: str):
     header_row = r
     r += 1
 
-    all_students = data["students"]
+    all_students = sorted(data["students"], key=lambda s: s["percent"], reverse=True)
     # Faqat BIRINCHI MARTA topshirmagan (ya'ni qayta topshirgan) o'quvchilar
     # GROUP INDEX / PASSING INDEX hisobiga kiradi. Birinchi marta topshirganlar
     # jadvalda ko'rinadi, lekin indeksga qo'shilmaydi.
@@ -156,7 +172,7 @@ def build_excel(data: dict, filepath: str):
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols - 2)
     _cell(ws, r, 1, "GROUP INDEX", bold=True, fill=YELLOW, align="right")
     ws.merge_cells(start_row=r, start_column=n_cols - 1, end_row=r, end_column=n_cols)
-    _cell(ws, r, n_cols - 1, f"{avg_percent:.0f}%", bold=True, fill=YELLOW)
+    _cell(ws, r, n_cols - 1, f"{avg_percent:.0f}%", bold=True, fill=group_index_color(avg_percent))
     r += 1
 
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols - 2)
