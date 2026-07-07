@@ -125,11 +125,19 @@ def build_excel(data: dict, filepath: str):
     header_row = r
     r += 1
 
-    all_students = sorted(data["students"], key=lambda s: s["percent"], reverse=True)
-    # Faqat BIRINCHI MARTA topshirmagan (ya'ni qayta topshirgan) o'quvchilar
-    # GROUP INDEX / PASSING INDEX hisobiga kiradi. Birinchi marta topshirganlar
-    # jadvalda ko'rinadi, lekin indeksga qo'shilmaydi.
-    index_students = [s for s in all_students if not s["first_time"]]
+    all_students = data["students"]
+    # Checkbox orqali "QAYTA TOPSHIRMOQDA" deb belgilanganlar (first_time=False)
+    # asosiy jadvalda + GROUP/PASSING INDEKSGA kiradi.
+    index_students = sorted(
+        [s for s in all_students if not s["first_time"]],
+        key=lambda s: s["percent"], reverse=True,
+    )
+    # Belgilanmaganlar (first_time=True) — bitta qator tashlab, pastda ALOHIDA
+    # jadvalda ko'rsatiladi, indeksga kirmaydi.
+    separate_students = sorted(
+        [s for s in all_students if s["first_time"]],
+        key=lambda s: s["percent"], reverse=True,
+    )
 
     def write_student(row_idx, idx, s):
         if is_unit:
@@ -155,11 +163,11 @@ def build_excel(data: dict, filepath: str):
         for c in range(1, n_cols + 1):
             ws.cell(row=row_idx, column=c).fill = fill
 
-    for idx, s in enumerate(all_students, start=1):
+    for idx, s in enumerate(index_students, start=1):
         write_student(r, idx, s)
         r += 1
 
-    # Group / Passing index — faqat qayta topshirganlar (first_time=False) asosida
+    # Group / Passing index — faqat checkbox bilan belgilangan (first_time=False) asosida
     r += 1
     if index_students:
         avg_percent = sum(s["percent"] for s in index_students) / len(index_students)
@@ -180,6 +188,14 @@ def build_excel(data: dict, filepath: str):
     ws.merge_cells(start_row=r, start_column=n_cols - 1, end_row=r, end_column=n_cols)
     _cell(ws, r, n_cols - 1, f"{passing_percent:.1f}%", bold=True, fill=YELLOW)
     r += 1
+
+    # Alohida jadval: BIRINCHI MARTA topshirganlar (checkbox belgilanmagan)
+    # — bitta bo'sh qator tashlab, indeksga kirmagan holda pastda ko'rsatiladi
+    if separate_students:
+        r += 1  # bitta bo'sh qator
+        for idx, s in enumerate(separate_students, start=1):
+            write_student(r, idx, s)
+            r += 1
 
     # Column widths
     widths = [4, 18, 16, 11, 11, 11, 11, 9, 11] if not is_unit else [4, 18, 16, 9, 10, 11]
