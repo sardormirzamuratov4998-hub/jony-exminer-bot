@@ -167,6 +167,15 @@ def build_excel(data: dict, filepath: str):
         write_student(r, idx, s)
         r += 1
 
+    # Alohida jadval: BIRINCHI MARTA topshirganlar (checkbox belgilanmagan)
+    # — asosiy jadvaldan bitta bo'sh qator tashlab, GROUP/PASSING INDEXdan OLDIN
+    # ko'rsatiladi, lekin indeksga kirmaydi
+    if separate_students:
+        r += 1  # bitta bo'sh qator
+        for idx, s in enumerate(separate_students, start=1):
+            write_student(r, idx, s)
+            r += 1
+
     # Group / Passing index — faqat checkbox bilan belgilangan (first_time=False) asosida
     r += 1
     if index_students:
@@ -188,14 +197,6 @@ def build_excel(data: dict, filepath: str):
     ws.merge_cells(start_row=r, start_column=n_cols - 1, end_row=r, end_column=n_cols)
     _cell(ws, r, n_cols - 1, f"{passing_percent:.1f}%", bold=True, fill=YELLOW)
     r += 1
-
-    # Alohida jadval: BIRINCHI MARTA topshirganlar (checkbox belgilanmagan)
-    # — bitta bo'sh qator tashlab, indeksga kirmagan holda pastda ko'rsatiladi
-    if separate_students:
-        r += 1  # bitta bo'sh qator
-        for idx, s in enumerate(separate_students, start=1):
-            write_student(r, idx, s)
-            r += 1
 
     # Column widths
     widths = [4, 18, 16, 11, 11, 11, 11, 9, 11] if not is_unit else [4, 18, 16, 9, 10, 11]
