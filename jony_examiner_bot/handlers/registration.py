@@ -52,6 +52,18 @@ async def cmd_start(message: Message, state: FSMContext):
         await send_menu_for_user(message, user)
         return
 
+    is_adm = await db.is_admin(message.from_user.id)
+    if is_adm:
+        await message.answer(
+            "👋 Siz <b>ADMIN</b> sifatida belgilangansiz!\n\n"
+            "Admin komandalari uchun /admin yozing.\n\n"
+            "Agar bundan tashqari Ustoz yoki Examiner sifatida ham ro'yxatdan "
+            "o'tmoqchi bo'lsangiz, quyidagidan tanlang (ixtiyoriy):",
+            reply_markup=role_choice_kb(),
+        )
+        await state.set_state(RegStates.choose_role)
+        return
+
     await state.set_state(RegStates.choose_role)
     await message.answer(
         "Assalomu alaykum! 👋\n<b>Jony Academy Bot</b>ga xush kelibsiz.\n\n"
