@@ -1,0 +1,221 @@
+import aiosqlite
+from datetime import datetime
+
+DB_PATH = "jony_bookings.db"
+
+BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
+
+
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                role TEXT NOT NULL,          -- TEACHER | EXAMINER
+                full_name TEXT NOT NULL,
+                branch TEXT NOT NULL,
+                status TEXT NOT NULL,        -- active | pending | approved | rejected
+                username TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bookings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                teacher_telegram_id INTEGER NOT NULL,
+                teacher_name TEXT NOT NULL,
+                branch TEXT NOT NULL,
+                exam_date TEXT NOT NULL,      -- DD.MM.YYYY
+                exam_time TEXT NOT NULL,      -- HH:MM
+                test_type TEXT NOT NULL,      -- UNIT TEST | END OF COURSE / MIDTERM
+                test_name TEXT,               -- e.g. "Unit 7"
+                group_name TEXT NOT NULL,     -- e.g. "Step 3 (Vikings)"
+                students_count INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted | cancelled
+                examiner_telegram_id INTEGER,
+                examiner_name TEXT,
+                created_at TEXT NOT NULL,
+                reminder_1h_sent INTEGER DEFAULT 0,
+                reminder_time_sent INTEGER DEFAULT 0,
+                escalated INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS booking_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                booking_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        await db.commit()
+
+
+# ---------- SETTINGS ----------
+
+async def set_setting(key: str, value: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        await db.commit()
+
+
+async def get_setting(key: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+
+# ---------- USERS ----------
+
+async def get_user(telegram_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def create_user(telegram_id: int, role: str, full_name: str, branch: str, status: str, username: str = None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO users (telegram_id, role, full_name, branch, status, username) VALUES (?,?,?,?,?,?)",
+            (telegram_id, role, full_name, branch, status, username),
+        )
+        await db.commit()
+
+
+async def update_user_status(telegram_id: int, status: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET status=? WHERE telegram_id=?", (status, telegram_id))
+        await db.commit()
+
+
+async def get_examiners_by_branch(branch: str, status: str = "approved"):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM users WHERE role='EXAMINER' AND branch=? AND status=?",
+            (branch, status),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------- BOOKINGS ----------
+
+async def create_booking(data: dict) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """INSERT INTO bookings
+               (teacher_telegram_id, teacher_name, branch, exam_date, exam_time,
+                test_type, test_name, group_name, students_count, status, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?, 'pending', ?)""",
+            (
+                data["teacher_telegram_id"], data["teacher_name"], data["branch"],
+                data["exam_date"], data["exam_time"], data["test_type"],
+                data.get("test_name"), data["group_name"], data["students_count"],
+                datetime.now().isoformat(),
+            ),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_booking(booking_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM bookings WHERE id=?", (booking_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def accept_booking(booking_id: int, examiner_telegram_id: int, examiner_name: str) -> bool:
+    """Returns True if successfully accepted (was pending), False if already taken."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT status FROM bookings WHERE id=?", (booking_id,))
+        row = await cur.fetchone()
+        if not row or row[0] != "pending":
+            return False
+        await db.execute(
+            "UPDATE bookings SET status='accepted', examiner_telegram_id=?, examiner_name=? WHERE id=?",
+            (examiner_telegram_id, examiner_name, booking_id),
+        )
+        await db.commit()
+        return True
+
+
+async def examiner_has_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """SELECT COUNT(*) FROM bookings
+               WHERE examiner_telegram_id=? AND exam_date=? AND exam_time=? AND status='accepted'""",
+            (examiner_telegram_id, exam_date, exam_time),
+        )
+        row = await cur.fetchone()
+        return row[0] > 0
+
+
+async def add_notification(booking_id: int, chat_id: int, message_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO booking_notifications (booking_id, chat_id, message_id) VALUES (?,?,?)",
+            (booking_id, chat_id, message_id),
+        )
+        await db.commit()
+
+
+async def get_notifications(booking_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM booking_notifications WHERE booking_id=?", (booking_id,))
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_pending_bookings_older_than(hours: int):
+    cutoff = datetime.now().timestamp() - hours * 3600
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM bookings WHERE status='pending' AND escalated=0")
+        rows = await cur.fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            created = datetime.fromisoformat(d["created_at"]).timestamp()
+            if created <= cutoff:
+                result.append(d)
+        return result
+
+
+async def mark_escalated(booking_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE bookings SET escalated=1 WHERE id=?", (booking_id,))
+        await db.commit()
+
+
+async def get_accepted_bookings_needing_reminder():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM bookings WHERE status='accepted' AND (reminder_1h_sent=0 OR reminder_time_sent=0)"
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def mark_reminder_sent(booking_id: int, which: str):
+    col = "reminder_1h_sent" if which == "1h" else "reminder_time_sent"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE bookings SET {col}=1 WHERE id=?", (booking_id,))
+        await db.commit()
