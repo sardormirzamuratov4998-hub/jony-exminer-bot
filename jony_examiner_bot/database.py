@@ -54,7 +54,48 @@ async def init_db():
                 value TEXT
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                telegram_id INTEGER PRIMARY KEY,
+                full_name TEXT,
+                username TEXT,
+                added_by INTEGER,
+                added_at TEXT
+            )
+        """)
         await db.commit()
+
+
+# ---------- ADMINS ----------
+
+async def is_admin(telegram_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute("SELECT 1 FROM admins WHERE telegram_id=?", (telegram_id,))
+        return await cur.fetchone() is not None
+
+
+async def add_admin(telegram_id: int, full_name: str = None, username: str = None, added_by: int = None):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute(
+            "INSERT OR IGNORE INTO admins (telegram_id, full_name, username, added_by, added_at) "
+            "VALUES (?,?,?,?,?)",
+            (telegram_id, full_name, username, added_by, datetime.now().isoformat()),
+        )
+        await db_.commit()
+
+
+async def remove_admin(telegram_id: int):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("DELETE FROM admins WHERE telegram_id=?", (telegram_id,))
+        await db_.commit()
+
+
+async def list_admins():
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM admins")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
 
 # ---------- SETTINGS ----------
@@ -101,10 +142,63 @@ async def update_user_status(telegram_id: int, status: str):
         await db.commit()
 
 
+async def get_pending_examiners():
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM users WHERE role='EXAMINER' AND status='pending'")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_all_staff():
+    """Barcha ustoz va examinerlar (o'chirilganlardan tashqari)."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            "SELECT * FROM users WHERE status != 'removed' ORDER BY branch, role, full_name"
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_user_by_row_id(user_row_id: int):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM users WHERE id=?", (user_row_id,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def deactivate_user_by_row_id(user_row_id: int):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("UPDATE users SET status='removed' WHERE id=?", (user_row_id,))
+        await db_.commit()
+
+
+async def reactivate_user_by_row_id(user_row_id: int):
+    user = await get_user_by_row_id(user_row_id)
+    if not user:
+        return
+    new_status = "active" if user["role"] == "TEACHER" else "approved"
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("UPDATE users SET status=? WHERE id=?", (new_status, user_row_id))
+        await db_.commit()
+
+
+async def get_active_bookings():
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            "SELECT * FROM bookings WHERE status IN ('pending','accepted') ORDER BY exam_date, exam_time"
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_examiners_by_branch(branch: str, status: str = "approved"):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
             "SELECT * FROM users WHERE role='EXAMINER' AND branch=? AND status=?",
             (branch, status),
         )
