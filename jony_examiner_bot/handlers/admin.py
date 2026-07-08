@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 import database as db
-from keyboards import examiner_approve_kb
+from keyboards import examiner_approve_kb, admin_panel_kb
 
 router = Router()
 
@@ -14,9 +14,20 @@ class AddAdminStates(StatesGroup):
     waiting_input = State()
 
 
+class RemoveAdminStates(StatesGroup):
+    waiting_input = State()
+
+
 async def _require_admin(message: Message) -> bool:
     if not await db.is_admin(message.from_user.id):
         await message.answer("Bu komanda faqat adminlar uchun.")
+        return False
+    return True
+
+
+async def _require_admin_callback(callback: CallbackQuery) -> bool:
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
         return False
     return True
 
@@ -83,6 +94,20 @@ async def remove_admin_cmd(message: Message):
         await message.answer("Foydalanish: /remove_admin <telegram_id>")
         return
     target_id = int(parts[1])
+    await db.remove_admin(target_id)
+    await message.answer(f"✅ {target_id} adminlikdan olib tashlandi.")
+
+
+@router.message(RemoveAdminStates.waiting_input)
+async def remove_admin_process(message: Message, state: FSMContext):
+    if not await _require_admin(message):
+        await state.clear()
+        return
+    await state.clear()
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("Telegram ID faqat raqam bo'lishi kerak. Masalan: 123456789")
+        return
+    target_id = int(message.text.strip())
     await db.remove_admin(target_id)
     await message.answer(f"✅ {target_id} adminlikdan olib tashlandi.")
 
