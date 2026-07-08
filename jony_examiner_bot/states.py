@@ -36,3 +36,24 @@ class ExamStates(StatesGroup):
     # RETAKE MARKING
     retake_marking = State()
     retake_manual_text = State()
+
+
+class RegStates(StatesGroup):
+    choose_role = State()
+    full_name = State()
+    choose_branch = State()
+
+
+class BookingStates(StatesGroup):
+    exam_date = State()
+    exam_time = State()
+    test_type = State()
+    unit_name = State()
+    group_name = State()
+    students_count = State()
+    confirm = State()
+
+
+class AdminStates(StatesGroup):
+    pass
+
