@@ -51,3 +51,69 @@ def cancel_kb():
     builder.button(text="❌ Bekor qilish")
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
+
+
+# ---------- ROLE / BOOKING KEYBOARDS ----------
+
+BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
+
+
+def role_choice_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👩‍🏫 Men Ustozman", callback_data="role:TEACHER")
+    builder.button(text="🧑‍💼 Men Examinerman", callback_data="role:EXAMINER")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def branch_kb(prefix="branch"):
+    builder = InlineKeyboardBuilder()
+    for b in BRANCHES:
+        builder.button(text=b, callback_data=f"{prefix}:{b}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def teacher_menu_kb():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="📅 Imtihon buyurtma qilish")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def examiner_menu_kb():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🆕 Test kiritish")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def test_type_booking_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📘 UNIT TEST", callback_data="booking_type:UNIT TEST")
+    builder.button(text="📗 END OF COURSE / MIDTERM", callback_data="booking_type:END OF COURSE / MIDTERM")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def booking_confirm_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Yuborish", callback_data="booking_confirm")
+    builder.button(text="❌ Bekor qilish", callback_data="booking_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def accept_booking_kb(booking_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Qabul qilish", callback_data=f"accept_booking:{booking_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def examiner_approve_kb(telegram_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Tasdiqlash", callback_data=f"approve_examiner:{telegram_id}")
+    builder.button(text="❌ Rad etish", callback_data=f"reject_examiner:{telegram_id}")
+    builder.adjust(2)
+    return builder.as_markup()
