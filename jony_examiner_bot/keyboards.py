@@ -58,10 +58,25 @@ def cancel_kb():
 BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
 
 
-def role_choice_kb():
+def role_choice_kb(show_admin: bool = False):
     builder = InlineKeyboardBuilder()
     builder.button(text="👩‍🏫 Men Ustozman", callback_data="role:TEACHER")
     builder.button(text="🧑‍💼 Men Examinerman", callback_data="role:EXAMINER")
+    if show_admin:
+        builder.button(text="🛠 Men Adminman", callback_data="role:ADMIN")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admin_panel_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🕒 Pending examinerlar", callback_data="admin:pending")
+    builder.button(text="📅 Buyurtmalar", callback_data="admin:bookings")
+    builder.button(text="👥 Staff ro'yxati", callback_data="admin:staff")
+    builder.button(text="👤 Adminlar", callback_data="admin:admins")
+    builder.button(text="➕ Admin qo'shish", callback_data="admin:add_admin")
+    builder.button(text="➖ Admin o'chirish", callback_data="admin:remove_admin")
+    builder.button(text="📌 Admin guruh qilish", callback_data="admin:admin_group")
     builder.adjust(1)
     return builder.as_markup()
 
