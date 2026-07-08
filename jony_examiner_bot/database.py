@@ -136,6 +136,20 @@ async def create_user(telegram_id: int, role: str, full_name: str, branch: str, 
         await db.commit()
 
 
+async def upsert_user(telegram_id: int, role: str, full_name: str, branch: str, status: str, username: str = None):
+    """Foydalanuvchi mavjud bo'lsa yangilaydi (rol o'zgartirish uchun), bo'lmasa yaratadi."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO users (telegram_id, role, full_name, branch, status, username)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(telegram_id) DO UPDATE SET
+                 role=excluded.role, full_name=excluded.full_name,
+                 branch=excluded.branch, status=excluded.status, username=excluded.username""",
+            (telegram_id, role, full_name, branch, status, username),
+        )
+        await db.commit()
+
+
 async def update_user_status(telegram_id: int, status: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET status=? WHERE telegram_id=?", (status, telegram_id))
