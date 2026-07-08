@@ -7,6 +7,7 @@ import database as db
 from states import RegStates
 from keyboards import (
     role_choice_kb,
+    admin_panel_kb,
     branch_kb,
     teacher_menu_kb,
     examiner_menu_kb,
@@ -61,7 +62,7 @@ async def cmd_start(message: Message, state: FSMContext):
             "Admin komandalari uchun /admin yozing.\n\n"
             "Agar bundan tashqari Ustoz yoki Examiner sifatida ham ro'yxatdan "
             "o'tmoqchi bo'lsangiz, quyidagidan tanlang (ixtiyoriy):",
-            reply_markup=role_choice_kb(),
+            reply_markup=role_choice_kb(show_admin=True),
         )
         await state.set_state(RegStates.choose_role)
         return
@@ -77,6 +78,19 @@ async def cmd_start(message: Message, state: FSMContext):
 @router.callback_query(RegStates.choose_role, F.data.startswith("role:"))
 async def choose_role(callback: CallbackQuery, state: FSMContext):
     role = callback.data.split(":")[1]
+
+    if role == "ADMIN":
+        if not await db.is_admin(callback.from_user.id):
+            await callback.answer("Admin rolini faqat mavjud admin tanlay oladi.", show_alert=True)
+            return
+        await state.clear()
+        await callback.message.edit_text(
+            "🛠 <b>Admin panel</b>\n\nKerakli bo'limni tanlang:",
+            reply_markup=admin_panel_kb(),
+        )
+        await callback.answer()
+        return
+
     await state.update_data(role=role)
     await state.set_state(RegStates.full_name)
     await callback.message.edit_text("Ism va familiyangizni kiriting:")
@@ -172,7 +186,7 @@ async def change_role(message: Message, state: FSMContext):
     await state.set_state(RegStates.choose_role)
     await message.answer(
         "Rolingizni qayta tanlang (mavjud ma'lumotlaringiz yangilanadi):",
-        reply_markup=role_choice_kb(),
+        reply_markup=role_choice_kb(show_admin=await db.is_admin(message.from_user.id)),
     )
 
 
