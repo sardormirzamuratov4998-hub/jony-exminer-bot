@@ -8,7 +8,9 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 
-from handlers import start, exam_flow
+from handlers import registration, booking, exam_flow
+import database as db
+from scheduler import start_scheduler
 
 load_dotenv()
 
@@ -21,14 +23,19 @@ if not BOT_TOKEN:
 
 
 async def main():
+    await db.init_db()
+
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
 
-    dp.include_router(start.router)
+    dp.include_router(registration.router)
+    dp.include_router(booking.router)
     dp.include_router(exam_flow.router)
+
+    start_scheduler(bot)
 
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("Bot ishga tushdi (polling)...")
