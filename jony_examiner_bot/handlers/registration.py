@@ -44,6 +44,11 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     user = await db.get_user(message.from_user.id)
     if user:
+        if user["status"] == "removed":
+            await message.answer(
+                "Sizning hisobingiz admin tomonidan o'chirilgan. Savol uchun admin bilan bog'laning."
+            )
+            return
         await send_menu_for_user(message, user)
         return
 
@@ -108,6 +113,9 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("approve_examiner:"))
 async def approve_examiner(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
     telegram_id = int(callback.data.split(":")[1])
     await db.update_user_status(telegram_id, "approved")
     user = await db.get_user(telegram_id)
@@ -127,6 +135,9 @@ async def approve_examiner(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("reject_examiner:"))
 async def reject_examiner(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
     telegram_id = int(callback.data.split(":")[1])
     await db.update_user_status(telegram_id, "rejected")
     await callback.message.edit_text(
@@ -141,22 +152,19 @@ async def reject_examiner(callback: CallbackQuery):
     await callback.answer("Rad etildi")
 
 
-@router.message(Command("admin_group"))
-async def set_admin_group(message: Message):
-    if message.chat.type not in ("group", "supergroup"):
-        await message.answer("Bu komanda faqat guruhda ishlaydi.")
-        return
-    await db.set_setting("admin_group_id", str(message.chat.id))
-    await message.answer(f"✅ Bu guruh admin guruh sifatida belgilandi.\nChat ID: {message.chat.id}")
-
-
 @router.message(Command("whoami"))
 async def whoami(message: Message):
     user = await db.get_user(message.from_user.id)
-    if not user:
+    is_adm = await db.is_admin(message.from_user.id)
+    if not user and not is_adm:
         await message.answer("Siz hali ro'yxatdan o'tmagansiz. /start bosing.")
         return
-    await message.answer(
-        f"Ism: {user['full_name']}\nRol: {user['role']}\n"
-        f"Filial: {user['branch']}\nHolat: {user['status']}"
-    )
+    lines = []
+    if user:
+        lines.append(
+            f"Ism: {user['full_name']}\nRol: {user['role']}\n"
+            f"Filial: {user['branch']}\nHolat: {user['status']}"
+        )
+    if is_adm:
+        lines.append("🛠 Siz ADMIN sifatida ham belgilangansiz.")
+    await message.answer("\n\n".join(lines))
