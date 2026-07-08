@@ -20,7 +20,8 @@ async def send_menu_for_user(message: Message, user: dict):
     if user["role"] == "TEACHER":
         await message.answer(
             f"Xush kelibsiz, {user['full_name']}! ({user['branch']} filiali)\n\n"
-            "Imtihon buyurtma qilish uchun tugmani bosing:",
+            "Imtihon buyurtma qilish uchun tugmani bosing:\n\n"
+            "(Rolni o'zgartirish kerak bo'lsa: /change_role)",
             reply_markup=teacher_menu_kb(),
         )
     elif user["role"] == "EXAMINER":
@@ -34,7 +35,8 @@ async def send_menu_for_user(message: Message, user: dict):
             await message.answer(
                 f"Xush kelibsiz, {user['full_name']}! ({user['branch']} filiali, Examiner)\n\n"
                 "Test natijalarini kiritish uchun tugmani bosing. Sizga mos filialdagi "
-                "yangi imtihon buyurtmalari haqida ham shu yerda xabar beriladi.",
+                "yangi imtihon buyurtmalari haqida ham shu yerda xabar beriladi.\n\n"
+                "(Rolni o'zgartirish kerak bo'lsa: /change_role)",
                 reply_markup=examiner_menu_kb(),
             )
 
@@ -98,7 +100,7 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
     username = callback.from_user.username
 
     status = "active" if role == "TEACHER" else "pending"
-    await db.create_user(telegram_id, role, full_name, branch, status, username)
+    await db.upsert_user(telegram_id, role, full_name, branch, status, username)
     await state.clear()
 
     if role == "TEACHER":
@@ -162,6 +164,16 @@ async def reject_examiner(callback: CallbackQuery):
     except Exception:
         pass
     await callback.answer("Rad etildi")
+
+
+@router.message(Command("change_role"))
+async def change_role(message: Message, state: FSMContext):
+    await state.clear()
+    await state.set_state(RegStates.choose_role)
+    await message.answer(
+        "Rolingizni qayta tanlang (mavjud ma'lumotlaringiz yangilanadi):",
+        reply_markup=role_choice_kb(),
+    )
 
 
 @router.message(Command("whoami"))
