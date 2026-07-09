@@ -11,7 +11,8 @@ from keyboards import (
     booking_confirm_kb,
     accept_booking_kb,
     cancel_kb,
-    teacher_menu_kb,
+    build_main_menu_kb,
+    booking_branch_kb,
 )
 
 router = Router()
@@ -27,11 +28,34 @@ async def start_booking(message: Message, state: FSMContext):
     user = await _is_teacher(message.from_user.id)
     if not user:
         return
+
+    branches = await db.get_teacher_branches(message.from_user.id)
+    if not branches:
+        branches = [user["branch"]]
+
+    if len(branches) == 1:
+        await state.update_data(branch=branches[0])
+        await state.set_state(BookingStates.exam_date)
+        await message.answer(
+            "Imtihon sanasini kiriting (masalan: 27.06.2026):",
+            reply_markup=cancel_kb(),
+        )
+    else:
+        await state.set_state(BookingStates.choose_branch)
+        await message.answer(
+            "Qaysi filial uchun buyurtma qilyapsiz?",
+            reply_markup=booking_branch_kb(branches),
+        )
+
+
+@router.callback_query(BookingStates.choose_branch, F.data.startswith("bookbranch:"))
+async def choose_booking_branch(callback: CallbackQuery, state: FSMContext):
+    branch = callback.data.split(":", 1)[1]
+    await state.update_data(branch=branch)
     await state.set_state(BookingStates.exam_date)
-    await message.answer(
-        "Imtihon sanasini kiriting (masalan: 27.06.2026):",
-        reply_markup=cancel_kb(),
-    )
+    await callback.message.edit_text(f"Filial: {branch} ✅")
+    await callback.message.answer("Imtihon sanasini kiriting (masalan: 27.06.2026):")
+    await callback.answer()
 
 
 @router.message(BookingStates.exam_date)
@@ -100,7 +124,7 @@ async def get_students_count(message: Message, state: FSMContext):
     summary = (
         "📋 <b>Buyurtma ma'lumotlari:</b>\n\n"
         f"Ustoz: {user['full_name']}\n"
-        f"Filial: {user['branch']}\n"
+        f"Filial: {data['branch']}\n"
         f"Sana: {data['exam_date']}\n"
         f"Vaqt: {data['exam_time']}\n"
         f"Test turi: {data['test_type']}"
@@ -116,8 +140,9 @@ async def get_students_count(message: Message, state: FSMContext):
 @router.callback_query(BookingStates.confirm, F.data == "booking_cancel")
 async def booking_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
+    is_adm = await db.is_admin(callback.from_user.id)
     await callback.message.edit_text("Bekor qilindi.")
-    await callback.message.answer("Bosh menyu:", reply_markup=teacher_menu_kb())
+    await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
     await callback.answer()
 
 
@@ -129,7 +154,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
     booking_id = await db.create_booking({
         "teacher_telegram_id": callback.from_user.id,
         "teacher_name": user["full_name"],
-        "branch": user["branch"],
+        "branch": data["branch"],
         "exam_date": data["exam_date"],
         "exam_time": data["exam_time"],
         "test_type": data["test_type"],
@@ -139,13 +164,14 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
     })
     await state.clear()
 
+    is_adm = await db.is_admin(callback.from_user.id)
     await callback.message.edit_text("✅ Buyurtmangiz yuborildi! Examiner qabul qilishini kuting.")
-    await callback.message.answer("Bosh menyu:", reply_markup=teacher_menu_kb())
+    await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
 
     text = (
         f"🔔 <b>Yangi imtihon buyurtmasi</b>\n\n"
         f"Ustoz: {user['full_name']}\n"
-        f"Filial: {user['branch']}\n"
+        f"Filial: {data['branch']}\n"
         f"Sana: {data['exam_date']}\n"
         f"Vaqt: {data['exam_time']}\n"
         f"Test turi: {data['test_type']}"
@@ -154,7 +180,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
         f"O'quvchilar soni: {data['students_count']}"
     )
 
-    examiners = await db.get_examiners_by_branch(user["branch"])
+    examiners = await db.get_examiners_by_branch(data["branch"])
     for ex in examiners:
         try:
             sent = await callback.bot.send_message(
@@ -184,10 +210,10 @@ async def accept_booking_handler(callback: CallbackQuery):
         return
 
     if booking["status"] != "pending":
-        await callback.answer(
-            f"Kechirasiz, bu buyurtmani allaqachon {booking['examiner_name']} qabul qilgan.",
-            show_alert=True,
-        )
+        msg = "Kechirasiz, bu buyurtma allaqachon band qilingan."
+        if booking["examiner_name"]:
+            msg = f"Kechirasiz, bu buyurtmani allaqachon {booking['examiner_name']} qabul qilgan."
+        await callback.answer(msg, show_alert=True)
         return
 
     conflict = await db.examiner_has_conflict(
@@ -209,7 +235,6 @@ async def accept_booking_handler(callback: CallbackQuery):
 
     await callback.answer("Qabul qilindi ✅")
 
-    # Barcha yuborilgan nusxalarni yangilash
     notifications = await db.get_notifications(booking_id)
     for note in notifications:
         try:
