@@ -58,32 +58,21 @@ def cancel_kb():
 BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
 
 
-def role_choice_kb(show_admin: bool = False):
+def role_choice_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="👩‍🏫 Men Ustozman", callback_data="role:TEACHER")
     builder.button(text="🧑‍💼 Men Examinerman", callback_data="role:EXAMINER")
-    if show_admin:
-        builder.button(text="🛠 Men Adminman", callback_data="role:ADMIN")
+    builder.button(text="🛠 Adminman", callback_data="role:ADMIN")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def admin_panel_kb():
-    builder = InlineKeyboardBuilder()
-    builder.button(text="🕒 Pending examinerlar", callback_data="admin:pending")
-    builder.button(text="📅 Buyurtmalar", callback_data="admin:bookings")
-    builder.button(text="👥 Staff ro'yxati", callback_data="admin:staff")
-    builder.button(text="👤 Adminlar", callback_data="admin:admins")
-    builder.button(text="➕ Admin qo'shish", callback_data="admin:add_admin")
-    builder.button(text="➖ Admin o'chirish", callback_data="admin:remove_admin")
-    builder.button(text="📌 Admin guruh qilish", callback_data="admin:admin_group")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def branch_kb(prefix="branch"):
+def branch_kb(prefix="branch", exclude=None):
+    exclude = exclude or []
     builder = InlineKeyboardBuilder()
     for b in BRANCHES:
+        if b in exclude:
+            continue
         builder.button(text=b, callback_data=f"{prefix}:{b}")
     builder.adjust(1)
     return builder.as_markup()
@@ -131,4 +120,46 @@ def examiner_approve_kb(telegram_id: int):
     builder.button(text="✅ Tasdiqlash", callback_data=f"approve_examiner:{telegram_id}")
     builder.button(text="❌ Rad etish", callback_data=f"reject_examiner:{telegram_id}")
     builder.adjust(2)
+    return builder.as_markup()
+
+
+def build_main_menu_kb(role: str = None, is_admin: bool = False):
+    """Rolga mos tugma(lar) + agar admin bo'lsa qo'shimcha Admin panel tugmasi."""
+    builder = ReplyKeyboardBuilder()
+    if role == "TEACHER":
+        builder.button(text="📅 Imtihon buyurtma qilish")
+        builder.button(text="➕ Filial qo'shish")
+    elif role == "EXAMINER":
+        builder.button(text="🆕 Test kiritish")
+    if is_admin:
+        builder.button(text="🛠 Admin panel")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def admin_only_menu_kb():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="🛠 Admin panel")
+    builder.adjust(1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def booking_branch_kb(branches):
+    builder = InlineKeyboardBuilder()
+    for b in branches:
+        builder.button(text=b, callback_data=f"bookbranch:{b}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admin_panel_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Kutilayotgan examinerlar", callback_data="admin_pending")
+    builder.button(text="📅 Faol buyurtmalar", callback_data="admin_bookings")
+    builder.button(text="👤 Xodimlar (o'chirish)", callback_data="admin_staff")
+    builder.button(text="🛡 Adminlar ro'yxati", callback_data="admin_admins")
+    builder.button(text="➕ Admin qo'shish", callback_data="admin_add")
+    builder.button(text="📊 Kunlik hisobot (hozir)", callback_data="admin_daily_report")
+    builder.button(text="ℹ️ Admin guruh sozlash", callback_data="admin_group_info")
+    builder.adjust(1)
     return builder.as_markup()
