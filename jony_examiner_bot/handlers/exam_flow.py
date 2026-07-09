@@ -13,8 +13,11 @@ from keyboards import (
     retake_kb,
     cancel_kb,
     start_kb,
+    entry_mode_kb,
 )
 from excel_export import build_excel
+
+import database as db
 
 router = Router()
 
@@ -50,6 +53,10 @@ async def safe_float(text: str):
 
 @router.message(F.text == "🆕 Test kiritish")
 async def start_exam(message: Message, state: FSMContext):
+    user = await db.get_user(message.from_user.id)
+    if not user or user["role"] != "EXAMINER" or user["status"] not in ("active", "approved"):
+        await message.answer("Bu funksiya faqat tasdiqlangan Examinerlar uchun.")
+        return
     await state.clear()
     await state.set_state(ExamStates.teacher)
     await message.answer(
@@ -142,8 +149,10 @@ async def get_unit_max_score(message: Message, state: FSMContext):
         await message.answer("Iltimos, faqat son kiriting (masalan: 30):")
         return
     await state.update_data(max_score=val)
-    await state.set_state(ExamStates.student_surname)
-    await message.answer("Endi o'quvchilarni kiritamiz.\n\n1-o'quvchining FAMILIYASI:")
+    await state.set_state(ExamStates.entry_mode_choice)
+    await message.answer(
+        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb()
+    )
 
 
 # ---------- MIDTERM QO'SHIMCHA MA'LUMOTLARI ----------
@@ -170,9 +179,11 @@ async def get_midterm_level_name(message: Message, state: FSMContext):
 @router.callback_query(ExamStates.sections_confirm, F.data == "sections:default")
 async def sections_default(callback: CallbackQuery, state: FSMContext):
     await state.update_data(sections=dict(DEFAULT_SECTIONS))
-    await state.set_state(ExamStates.student_surname)
+    await state.set_state(ExamStates.entry_mode_choice)
     await callback.message.edit_text("Standart ballar qabul qilindi ✅")
-    await callback.message.answer("Endi o'quvchilarni kiritamiz.\n\n1-o'quvchining FAMILIYASI:")
+    await callback.message.answer(
+        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb()
+    )
     await callback.answer()
 
 
@@ -230,11 +241,110 @@ async def sec_speaking(message: Message, state: FSMContext):
         "speaking": val,
     }
     await state.update_data(sections=sections)
+    await state.set_state(ExamStates.entry_mode_choice)
+    await message.answer(
+        "Ballar saqlandi ✅\n\nO'quvchilarni qanday kiritmoqchisiz?",
+        reply_markup=entry_mode_kb(),
+    )
+
+
+# ---------- KIRITISH REJIMI TANLASH ----------
+
+@router.callback_query(ExamStates.entry_mode_choice, F.data == "entry_mode:single")
+async def entry_mode_single(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExamStates.student_surname)
-    await message.answer("Ballar saqlandi ✅\n\nEndi o'quvchilarni kiritamiz.\n\n1-o'quvchining FAMILIYASI:")
+    await callback.message.edit_text("1-o'quvchining FAMILIYASI:")
+    await callback.answer()
 
 
-# ---------- O'QUVCHI KIRITISH ----------
+@router.callback_query(ExamStates.entry_mode_choice, F.data == "entry_mode:bulk")
+async def entry_mode_bulk(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.set_state(ExamStates.bulk_entry)
+    if data["test_type"] == "unit":
+        example = (
+            "Har bir o'quvchini YANGI QATORDA yozing:\n"
+            "<b>Familiya Ism Ball</b>\n\n"
+            "Masalan:\n"
+            "Alisherova Malika 30\n"
+            "Yaxshiboyeva Gulsevar 28\n"
+            "Nabiddinova Dilshoda 25\n\n"
+            "(Excel'dan Familiya, Ism, Ball ustunlarini belgilab, nusxalab, "
+            "shu yerga qo'yishingiz ham mumkin)"
+        )
+    else:
+        example = (
+            "Har bir o'quvchini YANGI QATORDA yozing:\n"
+            "<b>Familiya Ism Listening Reading Writing Speaking</b>\n\n"
+            "Masalan:\n"
+            "Nematova Kumush 19 24 33 13\n"
+            "Sarvarjonova Xadija 13 19 36 14\n\n"
+            "(Excel'dan tegishli ustunlarni belgilab, nusxalab, shu yerga "
+            "qo'yishingiz ham mumkin)"
+        )
+    await callback.message.edit_text(example)
+    await callback.answer()
+
+
+@router.message(ExamStates.bulk_entry)
+async def bulk_entry_process(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lines = [ln.strip() for ln in message.text.split("\n") if ln.strip()]
+    students = data.get("students", [])
+    added = 0
+    errors = []
+
+    for i, line in enumerate(lines, start=1):
+        tokens = line.replace("\t", " ").split()
+        try:
+            if data["test_type"] == "unit":
+                if len(tokens) < 3:
+                    raise ValueError("kamida 3 ta qism kerak")
+                surname = tokens[0]
+                name = " ".join(tokens[1:-1])
+                score = float(tokens[-1].replace(",", "."))
+                if score < 0 or score > data["max_score"]:
+                    raise ValueError(f"ball 0-{data['max_score']} oralig'ida bo'lishi kerak")
+                percent = score / data["max_score"] * 100
+                status = unit_status(percent)
+                students.append({
+                    "surname": surname, "name": name, "total": score,
+                    "percent": percent, "status": status, "first_time": True,
+                })
+            else:
+                if len(tokens) < 6:
+                    raise ValueError("kamida 6 ta qism kerak")
+                sec = data["sections"]
+                surname = tokens[0]
+                name = " ".join(tokens[1:-4])
+                l, r, w, s = [float(t.replace(",", ".")) for t in tokens[-4:]]
+                if not (0 <= l <= sec["listening"] and 0 <= r <= sec["reading"]
+                        and 0 <= w <= sec["writing"] and 0 <= s <= sec["speaking"]):
+                    raise ValueError("ballar max qiymatdan oshib ketgan")
+                total = l + r + w + s
+                max_total = sum(sec.values())
+                percent = total / max_total * 100
+                status = midterm_status(percent)
+                students.append({
+                    "surname": surname, "name": name, "listening": l, "reading": r,
+                    "writing": w, "speaking": s, "total": total, "percent": percent,
+                    "status": status, "first_time": True,
+                })
+            added += 1
+        except Exception as e:
+            errors.append(f"{i}-qator: \"{line}\" — {e}")
+
+    await state.update_data(students=students)
+    await state.set_state(ExamStates.after_student)
+
+    msg = f"✅ {added} ta o'quvchi qo'shildi."
+    if errors:
+        msg += "\n\n⚠️ Quyidagi qatorlarda xatolik (qo'shilmadi):\n" + "\n".join(errors)
+        msg += "\n\nBularni \"➕ O'quvchi qo'shish\" orqali birma-bir qo'shishingiz mumkin."
+    await message.answer(msg, reply_markup=after_student_kb())
+
+
+# ---------- O'QUVCHI KIRITISH (birma-bir) ----------
 
 @router.message(ExamStates.student_surname)
 async def get_student_surname(message: Message, state: FSMContext):
