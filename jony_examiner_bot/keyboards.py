@@ -40,10 +40,24 @@ def entry_mode_kb():
     return builder.as_markup()
 
 
-def retake_kb(students, selected):
+def retake_checkbox_kb(students, selected):
+    """selected = index'ga QO'SHILMAYDIGAN (belgilangan) o'quvchilar to'plami."""
     builder = InlineKeyboardBuilder()
     for i, s in enumerate(students):
         mark = "☑️" if i in selected else "⬜️"
+        builder.button(
+            text=f"{mark} {s['surname']} {s['name']}", callback_data=f"idx_toggle:{i}"
+        )
+    builder.button(text="✏️ Ismlarni yozib chiqish", callback_data="idx_manual")
+    builder.button(text="✅ Tasdiqlash va Excel yaratish", callback_data="idx_confirm")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def retake_kb(students, selected):
+    builder = InlineKeyboardBuilder()
+    for i, s in enumerate(students):
+        mark = "🚫" if i in selected else "⬜️"
         builder.button(
             text=f"{mark} {s['surname']} {s['name']}",
             callback_data=f"retake_toggle:{i}",
