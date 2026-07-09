@@ -1,7 +1,8 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 import database as db
 
@@ -21,7 +22,6 @@ async def check_reminders(bot):
         except ValueError:
             continue
 
-        # 1 soat oldin eslatma (55-65 daqiqa oralig'ida, chunki job har daqiqa ishlamaydi)
         minutes_left = (exam_dt - now).total_seconds() / 60
         if not b["reminder_1h_sent"] and 0 <= minutes_left <= 65 and minutes_left >= 55:
             try:
@@ -36,7 +36,6 @@ async def check_reminders(bot):
                 logger.exception("1 soatlik eslatma yuborilmadi")
             await db.mark_reminder_sent(b["id"], "1h")
 
-        # Imtihon vaqti keldi eslatmasi (0-5 daqiqa oralig'ida)
         if not b["reminder_time_sent"] and -5 <= minutes_left <= 5:
             try:
                 await bot.send_message(
@@ -76,9 +75,36 @@ async def check_escalations(bot):
         await db.mark_escalated(b["id"])
 
 
+async def check_expired_bookings(bot):
+    """Imtihon sanasi o'tib ketgan buyurtmalarni 'expired' deb belgilaydi."""
+    expired_ids = await db.expire_past_bookings()
+    if expired_ids:
+        logger.info(f"{len(expired_ids)} ta buyurtma muddati o'tgani uchun 'expired' qilindi")
+
+
+async def send_daily_report(bot):
+    """Har kuni soat 18:00 da admin guruhga kunlik hisobot yuboradi."""
+    from handlers.admin import _send_daily_report
+
+    admin_group_id = await db.get_setting("admin_group_id")
+    if not admin_group_id:
+        logger.info("Kunlik hisobot yuborilmadi: admin_group_id sozlanmagan")
+        return
+
+    async def send(text, **kwargs):
+        await bot.send_message(int(admin_group_id), text, **kwargs)
+
+    try:
+        await _send_daily_report(send)
+    except Exception:
+        logger.exception("Kunlik hisobot yuborishda xatolik")
+
+
 def start_scheduler(bot):
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_reminders, "interval", minutes=1, args=[bot])
     scheduler.add_job(check_escalations, "interval", minutes=30, args=[bot])
+    scheduler.add_job(check_expired_bookings, "interval", minutes=10, args=[bot])
+    scheduler.add_job(send_daily_report, CronTrigger(hour=18, minute=0), args=[bot])
     scheduler.start()
     return scheduler
