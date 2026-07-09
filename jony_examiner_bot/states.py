@@ -45,6 +45,7 @@ class RegStates(StatesGroup):
 
 
 class BookingStates(StatesGroup):
+    choose_branch = State()
     exam_date = State()
     exam_time = State()
     test_type = State()
