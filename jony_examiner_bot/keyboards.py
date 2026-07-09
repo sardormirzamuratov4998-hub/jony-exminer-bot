@@ -32,6 +32,14 @@ def after_student_kb():
     return builder.as_markup(resize_keyboard=True)
 
 
+def entry_mode_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Ro'yxatni bir xabarda yuborish (tezroq)", callback_data="entry_mode:bulk")
+    builder.button(text="📝 Birma-bir kiritish", callback_data="entry_mode:single")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def retake_kb(students, selected):
     builder = InlineKeyboardBuilder()
     for i, s in enumerate(students):
