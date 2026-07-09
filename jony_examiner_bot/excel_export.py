@@ -2,7 +2,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-ORANGE = "FFC000"
+ORANGE = "FFD966"
 BLUE_HEADER = "9DC3E6"
 YELLOW = "FFFF00"
 RED = "FF0000"
@@ -25,6 +25,13 @@ def status_color(status: str) -> str:
         "PASS": GREEN_LIGHT,
     }
     return mapping.get(status, "FFFFFF")
+
+
+def font_color_for_status(status: str):
+    """To'q fon (FAIL qizil, EXCELLENT to'q yashil) uchun oq shrift, qolganlari uchun qora."""
+    if status in ("FAIL", "EXCELLENT"):
+        return "FFFFFF"
+    return None
 
 
 def group_index_color(percent: float) -> str:
@@ -140,23 +147,24 @@ def build_excel(data: dict, filepath: str):
     )
 
     def write_student(row_idx, idx, s):
+        fc = font_color_for_status(s["status"])
         if is_unit:
-            _cell(ws, row_idx, 1, idx)
-            _cell(ws, row_idx, 2, s["surname"], align="left")
-            _cell(ws, row_idx, 3, s["name"], align="left")
-            _cell(ws, row_idx, 4, s["total"])
-            _cell(ws, row_idx, 5, f'{s["percent"]:.1f}%')
-            _cell(ws, row_idx, 6, s["status"], bold=True)
+            _cell(ws, row_idx, 1, idx, font_color=fc)
+            _cell(ws, row_idx, 2, s["surname"], align="left", font_color=fc)
+            _cell(ws, row_idx, 3, s["name"], align="left", font_color=fc)
+            _cell(ws, row_idx, 4, s["total"], font_color=fc)
+            _cell(ws, row_idx, 5, f'{s["percent"]:.1f}%', font_color=fc)
+            _cell(ws, row_idx, 6, s["status"], bold=True, font_color=fc)
         else:
-            _cell(ws, row_idx, 1, idx)
-            _cell(ws, row_idx, 2, s["surname"], align="left")
-            _cell(ws, row_idx, 3, s["name"], align="left")
-            _cell(ws, row_idx, 4, s["listening"])
-            _cell(ws, row_idx, 5, s["reading"])
-            _cell(ws, row_idx, 6, s["writing"])
-            _cell(ws, row_idx, 7, s["speaking"])
-            _cell(ws, row_idx, 8, s["total"])
-            _cell(ws, row_idx, 9, s["status"], bold=True)
+            _cell(ws, row_idx, 1, idx, font_color=fc)
+            _cell(ws, row_idx, 2, s["surname"], align="left", font_color=fc)
+            _cell(ws, row_idx, 3, s["name"], align="left", font_color=fc)
+            _cell(ws, row_idx, 4, s["listening"], font_color=fc)
+            _cell(ws, row_idx, 5, s["reading"], font_color=fc)
+            _cell(ws, row_idx, 6, s["writing"], font_color=fc)
+            _cell(ws, row_idx, 7, s["speaking"], font_color=fc)
+            _cell(ws, row_idx, 8, s["total"], font_color=fc)
+            _cell(ws, row_idx, 9, s["status"], bold=True, font_color=fc)
         # Butun qatorni status rangiga bo'yash
         color = status_color(s["status"])
         fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
