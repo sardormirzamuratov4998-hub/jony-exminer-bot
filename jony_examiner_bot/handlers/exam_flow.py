@@ -10,10 +10,10 @@ from keyboards import (
     test_type_kb,
     sections_confirm_kb,
     after_student_kb,
-    retake_kb,
     cancel_kb,
-    start_kb,
+    build_main_menu_kb,
     entry_mode_kb,
+    retake_checkbox_kb,
 )
 from excel_export import build_excel
 
@@ -68,7 +68,8 @@ async def start_exam(message: Message, state: FSMContext):
 @router.message(F.text == "❌ Bekor qilish")
 async def cancel_flow(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Bekor qilindi.", reply_markup=start_kb())
+    is_adm = await db.is_admin(message.from_user.id)
+    await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb("EXAMINER", is_adm))
 
 
 # ---------- HEADER MA'LUMOTLARI ----------
@@ -490,17 +491,18 @@ async def finish_students(message: Message, state: FSMContext):
     await state.update_data(retake_selected=[])
     await state.set_state(ExamStates.retake_marking)
     await message.answer(
-        "Qaysi o'quvchi(lar) BIRINCHI MARTA emas, QAYTA topshirmoqda?\n"
-        "(Ularni belgilang — ular GROUP/PASSING INDEKSGA qo'shiladi, "
-        "birinchi marta topshirganlar esa jadvalda ko'rinadi lekin indeksga kirmaydi)",
-        reply_markup=retake_kb(students, []),
+        "Kimlarni natijalari <b>PASSED INDEX</b> va <b>GROUP INDEX</b>ga QO'SHILMASIN?\n\n"
+        "☑️ Belgilangan (check qilingan) o'quvchilar — jadvalda ko'rinadi, "
+        "lekin index'ga qo'shilmaydi.\n"
+        "⬜️ Ochiq qoldirilganlar — index'ga qo'shiladi.",
+        reply_markup=retake_checkbox_kb(students, []),
     )
 
 
-# ---------- RETAKE BELGILASH ----------
+# ---------- CHECKBOX ORQALI BELGILASH ----------
 
-@router.callback_query(ExamStates.retake_marking, F.data.startswith("retake_toggle:"))
-async def toggle_retake(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(ExamStates.retake_marking, F.data.startswith("idx_toggle:"))
+async def idx_toggle(callback: CallbackQuery, state: FSMContext):
     idx = int(callback.data.split(":")[1])
     data = await state.get_data()
     selected = set(data.get("retake_selected", []))
@@ -511,23 +513,23 @@ async def toggle_retake(callback: CallbackQuery, state: FSMContext):
     selected = list(selected)
     await state.update_data(retake_selected=selected)
     await callback.message.edit_reply_markup(
-        reply_markup=retake_kb(data["students"], selected)
+        reply_markup=retake_checkbox_kb(data["students"], selected)
     )
     await callback.answer()
 
 
-@router.callback_query(ExamStates.retake_marking, F.data == "retake_manual")
-async def retake_manual_start(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(ExamStates.retake_marking, F.data == "idx_manual")
+async def idx_manual_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ExamStates.retake_manual_text)
     await callback.message.answer(
-        "Qayta topshirgan o'quvchi(lar)ning FAMILIYA ISM'ini yozing.\n"
+        "Index'ga QO'SHILMASIN deb hisoblagan o'quvchi(lar)ning FAMILIYA ISMini yozing.\n"
         "Bir nechta bo'lsa, har birini yangi qatorda yozing."
     )
     await callback.answer()
 
 
 @router.message(ExamStates.retake_manual_text)
-async def retake_manual_input(message: Message, state: FSMContext):
+async def idx_manual_input(message: Message, state: FSMContext):
     data = await state.get_data()
     students = data["students"]
     selected = set(data.get("retake_selected", []))
@@ -547,20 +549,22 @@ async def retake_manual_input(message: Message, state: FSMContext):
 
     await state.update_data(retake_selected=list(selected))
     await state.set_state(ExamStates.retake_marking)
-    msg = "Belgilandi ✅"
+    msg = "Belgilandi ✅ (index'ga qo'shilmaydi)"
     if not_found:
         msg += "\n\nTopilmadi: " + ", ".join(not_found)
-    await message.answer(msg, reply_markup=retake_kb(students, list(selected)))
+    await message.answer(msg, reply_markup=retake_checkbox_kb(students, list(selected)))
 
 
-@router.callback_query(ExamStates.retake_marking, F.data == "retake_confirm")
-async def retake_confirm(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(ExamStates.retake_marking, F.data == "idx_confirm")
+async def idx_confirm(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     students = data["students"]
-    selected = set(data.get("retake_selected", []))
+    excluded = set(data.get("retake_selected", []))
 
+    # Belgilangan (checked) o'quvchilar jadvalda qoladi, lekin index'ga qo'shilmaydi
     for i, s in enumerate(students):
-        s["first_time"] = i not in selected
+        s["first_time"] = i in excluded
+    await state.update_data(students=students)
 
     export_data = {
         "teacher": data["teacher"],
@@ -582,8 +586,12 @@ async def retake_confirm(callback: CallbackQuery, state: FSMContext):
     filename = f"exports/exam_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     build_excel(export_data, filename)
 
+    is_adm = await db.is_admin(callback.from_user.id)
     await callback.message.edit_text("✅ Excel fayl tayyorlanmoqda...")
     await callback.message.answer_document(FSInputFile(filename), caption="Imtihon natijalari tayyor 📊")
-    await callback.message.answer("Yangi test kiritish uchun tugmani bosing:", reply_markup=start_kb())
+    await callback.message.answer(
+        "Yangi test kiritish uchun tugmani bosing:",
+        reply_markup=build_main_menu_kb("EXAMINER", is_adm),
+    )
     await state.clear()
     await callback.answer()
