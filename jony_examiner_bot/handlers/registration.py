@@ -7,39 +7,35 @@ import database as db
 from states import RegStates
 from keyboards import (
     role_choice_kb,
-    admin_panel_kb,
     branch_kb,
-    teacher_menu_kb,
-    examiner_menu_kb,
-    examiner_approve_kb,
+    build_main_menu_kb,
+    admin_only_menu_kb,
+    admin_panel_kb,
 )
 
 router = Router()
 
 
 async def send_menu_for_user(message: Message, user: dict):
+    is_adm = await db.is_admin(message.from_user.id)
     if user["role"] == "TEACHER":
         await message.answer(
             f"Xush kelibsiz, {user['full_name']}! ({user['branch']} filiali)\n\n"
-            "Imtihon buyurtma qilish uchun tugmani bosing:\n\n"
-            "(Rolni o'zgartirish kerak bo'lsa: /change_role)",
-            reply_markup=teacher_menu_kb(),
+            "Imtihon buyurtma qilish uchun tugmani bosing.\n"
+            "(Rolni o'zgartirish: /change_role)",
+            reply_markup=build_main_menu_kb("TEACHER", is_adm),
         )
     elif user["role"] == "EXAMINER":
-        if user["status"] == "pending":
-            await message.answer(
-                "So'rovingiz hali admin tomonidan tasdiqlanmagan. Iltimos, kuting."
-            )
-        elif user["status"] == "rejected":
+        if user["status"] == "rejected":
             await message.answer("Afsuski, so'rovingiz rad etilgan. Admin bilan bog'laning.")
-        else:
-            await message.answer(
-                f"Xush kelibsiz, {user['full_name']}! ({user['branch']} filiali, Examiner)\n\n"
-                "Test natijalarini kiritish uchun tugmani bosing. Sizga mos filialdagi "
-                "yangi imtihon buyurtmalari haqida ham shu yerda xabar beriladi.\n\n"
-                "(Rolni o'zgartirish kerak bo'lsa: /change_role)",
-                reply_markup=examiner_menu_kb(),
-            )
+            return
+        await message.answer(
+            f"Xush kelibsiz, {user['full_name']}! ({user['branch']} filiali, Examiner)\n\n"
+            "Test natijalarini kiritish uchun tugmani bosing. Sizga mos filialdagi "
+            "yangi imtihon buyurtmalari haqida ham shu yerda xabar beriladi.\n"
+            "(Rolni o'zgartirish: /change_role)",
+            reply_markup=build_main_menu_kb("EXAMINER", is_adm),
+        )
 
 
 @router.message(CommandStart())
@@ -59,12 +55,11 @@ async def cmd_start(message: Message, state: FSMContext):
     if is_adm:
         await message.answer(
             "👋 Siz <b>ADMIN</b> sifatida belgilangansiz!\n\n"
-            "Admin komandalari uchun /admin yozing.\n\n"
+            "Pastdagi tugma orqali admin panelga kirishingiz mumkin.\n\n"
             "Agar bundan tashqari Ustoz yoki Examiner sifatida ham ro'yxatdan "
-            "o'tmoqchi bo'lsangiz, quyidagidan tanlang (ixtiyoriy):",
-            reply_markup=role_choice_kb(show_admin=True),
+            "o'tmoqchi bo'lsangiz, /change_role yozing.",
+            reply_markup=admin_only_menu_kb(),
         )
-        await state.set_state(RegStates.choose_role)
         return
 
     await state.set_state(RegStates.choose_role)
@@ -75,19 +70,39 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 
+@router.message(Command("change_role"))
+async def change_role(message: Message, state: FSMContext):
+    await state.clear()
+    await state.set_state(RegStates.choose_role)
+    await message.answer(
+        "Rolingizni tanlang:",
+        reply_markup=role_choice_kb(),
+    )
+
+
+@router.message(F.text == "🛠 Admin panel")
+async def admin_panel_button(message: Message):
+    if not await db.is_admin(message.from_user.id):
+        await message.answer("Siz admin emassiz.")
+        return
+    await message.answer("🛠 <b>Admin panel</b>", reply_markup=admin_panel_kb())
+
+
 @router.callback_query(RegStates.choose_role, F.data.startswith("role:"))
 async def choose_role(callback: CallbackQuery, state: FSMContext):
     role = callback.data.split(":")[1]
 
     if role == "ADMIN":
-        if not await db.is_admin(callback.from_user.id):
-            await callback.answer("Admin rolini faqat mavjud admin tanlay oladi.", show_alert=True)
-            return
         await state.clear()
-        await callback.message.edit_text(
-            "🛠 <b>Admin panel</b>\n\nKerakli bo'limni tanlang:",
-            reply_markup=admin_panel_kb(),
-        )
+        is_adm = await db.is_admin(callback.from_user.id)
+        if is_adm:
+            await callback.message.edit_text("🛠 Siz admin ekansiz.")
+            await callback.message.answer("Admin panel:", reply_markup=admin_panel_kb())
+        else:
+            await callback.message.edit_text(
+                "Siz hali admin emassiz. Admin bo'lish uchun mavjud admin sizni "
+                "/add_admin orqali qo'shishi kerak."
+            )
         await callback.answer()
         return
 
@@ -113,31 +128,81 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     username = callback.from_user.username
 
-    status = "active" if role == "TEACHER" else "pending"
+    # Endi ustoz ham, examiner ham darhol faol bo'ladi — admin tasdiqlash shart emas
+    status = "active"
     await db.upsert_user(telegram_id, role, full_name, branch, status, username)
+    if role == "TEACHER":
+        await db.add_teacher_branch(telegram_id, branch)
     await state.clear()
+
+    is_adm = await db.is_admin(telegram_id)
 
     if role == "TEACHER":
         await callback.message.edit_text(f"Ro'yxatdan o'tdingiz ✅\nFilial: {branch}")
         await callback.message.answer(
             "Imtihon buyurtma qilish uchun tugmani bosing:",
-            reply_markup=teacher_menu_kb(),
+            reply_markup=build_main_menu_kb("TEACHER", is_adm),
         )
     else:
-        await callback.message.edit_text(
-            "So'rovingiz yuborildi ✅\nAdmin tasdiqlashini kuting."
+        await callback.message.edit_text(f"Ro'yxatdan o'tdingiz ✅\nFilial: {branch}")
+        await callback.message.answer(
+            "Test natijalarini kiritish uchun tugmani bosing:",
+            reply_markup=build_main_menu_kb("EXAMINER", is_adm),
         )
         admin_group_id = await db.get_setting("admin_group_id")
         if admin_group_id:
             uname = f"@{username}" if username else "username yo'q"
-            await callback.bot.send_message(
-                int(admin_group_id),
-                f"🆕 <b>Yangi Examiner so'rovi</b>\n\n"
-                f"Ism: {full_name}\nFilial: {branch}\nTelegram: {uname}",
-                reply_markup=examiner_approve_kb(telegram_id),
-            )
+            try:
+                await callback.bot.send_message(
+                    int(admin_group_id),
+                    f"ℹ️ Yangi Examiner ro'yxatdan o'tdi\n\n"
+                    f"Ism: {full_name}\nFilial: {branch}\nTelegram: {uname}",
+                )
+            except Exception:
+                pass
     await callback.answer()
 
+
+# ---------- FILIAL QO'SHISH (ustoz bir nechta filialda ishlashi uchun) ----------
+
+@router.message(F.text == "➕ Filial qo'shish")
+async def add_branch_start(message: Message):
+    user = await db.get_user(message.from_user.id)
+    if not user or user["role"] != "TEACHER":
+        return
+    existing = await db.get_teacher_branches(message.from_user.id)
+    from keyboards import BRANCHES
+    if len(existing) >= len(BRANCHES):
+        await message.answer("Siz allaqachon barcha filiallarga qo'shilgansiz.")
+        return
+    await message.answer(
+        "Qaysi filialni qo'shmoqchisiz?",
+        reply_markup=branch_kb(prefix="addbranch", exclude=existing),
+    )
+
+
+@router.callback_query(F.data.startswith("addbranch:"))
+async def add_branch_confirm(callback: CallbackQuery):
+    branch = callback.data.split(":", 1)[1]
+    await db.add_teacher_branch(callback.from_user.id, branch)
+    await callback.message.edit_text(f"✅ {branch} filiali qo'shildi.")
+    await callback.answer()
+
+
+# ---------- ADMIN PANEL TUGMALARI (callback) ----------
+
+@router.callback_query(F.data == "admin_group_info")
+async def admin_group_info(callback: CallbackQuery):
+    await callback.message.answer(
+        "Admin guruhni belgilash uchun:\n"
+        "1. Botni kerakli guruhga qo'shing\n"
+        "2. O'sha guruhda <code>/admin_group</code> deb yozing\n\n"
+        "(Bu faqat guruh ichida ishlaydi, shaxsiy chatda emas)"
+    )
+    await callback.answer()
+
+
+# ---------- ESKI (endi ishlatilmaydi, lekin eski pending yozuvlar uchun qoldirilgan) ----------
 
 @router.callback_query(F.data.startswith("approve_examiner:"))
 async def approve_examiner(callback: CallbackQuery):
@@ -145,16 +210,15 @@ async def approve_examiner(callback: CallbackQuery):
         await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
         return
     telegram_id = int(callback.data.split(":")[1])
-    await db.update_user_status(telegram_id, "approved")
-    user = await db.get_user(telegram_id)
-    await callback.message.edit_text(
-        callback.message.text + "\n\n✅ TASDIQLANDI"
-    )
+    await db.update_user_status(telegram_id, "active")
+    try:
+        await callback.message.edit_text(callback.message.text + "\n\n✅ TASDIQLANDI")
+    except Exception:
+        pass
     try:
         await callback.bot.send_message(
             telegram_id,
-            "Tabriklaymiz! So'rovingiz tasdiqlandi ✅\n\n"
-            "Endi test natijalarini kiritish uchun /start bosing.",
+            "Tabriklaymiz! So'rovingiz tasdiqlandi ✅\n\nEndi /start bosing.",
         )
     except Exception:
         pass
@@ -168,9 +232,10 @@ async def reject_examiner(callback: CallbackQuery):
         return
     telegram_id = int(callback.data.split(":")[1])
     await db.update_user_status(telegram_id, "rejected")
-    await callback.message.edit_text(
-        callback.message.text + "\n\n❌ RAD ETILDI"
-    )
+    try:
+        await callback.message.edit_text(callback.message.text + "\n\n❌ RAD ETILDI")
+    except Exception:
+        pass
     try:
         await callback.bot.send_message(
             telegram_id, "Afsuski, so'rovingiz rad etildi. Admin bilan bog'laning."
@@ -178,16 +243,6 @@ async def reject_examiner(callback: CallbackQuery):
     except Exception:
         pass
     await callback.answer("Rad etildi")
-
-
-@router.message(Command("change_role"))
-async def change_role(message: Message, state: FSMContext):
-    await state.clear()
-    await state.set_state(RegStates.choose_role)
-    await message.answer(
-        "Rolingizni qayta tanlang (mavjud ma'lumotlaringiz yangilanadi):",
-        reply_markup=role_choice_kb(show_admin=await db.is_admin(message.from_user.id)),
-    )
 
 
 @router.message(Command("whoami"))
@@ -199,9 +254,11 @@ async def whoami(message: Message):
         return
     lines = []
     if user:
+        branches = await db.get_teacher_branches(message.from_user.id) if user["role"] == "TEACHER" else []
+        branch_text = f"\nFiliallar: {', '.join(branches)}" if branches else ""
         lines.append(
             f"Ism: {user['full_name']}\nRol: {user['role']}\n"
-            f"Filial: {user['branch']}\nHolat: {user['status']}"
+            f"Filial: {user['branch']}{branch_text}\nHolat: {user['status']}"
         )
     if is_adm:
         lines.append("🛠 Siz ADMIN sifatida ham belgilangansiz.")
