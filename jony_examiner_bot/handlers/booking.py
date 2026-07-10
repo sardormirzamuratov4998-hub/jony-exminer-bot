@@ -8,6 +8,7 @@ import database as db
 from states import BookingStates
 from keyboards import (
     test_type_booking_kb,
+    midterm_type_choice_kb,
     booking_confirm_kb,
     accept_booking_kb,
     cancel_kb,
@@ -91,10 +92,20 @@ async def get_test_type(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Unit raqamini kiriting (masalan: Unit 7):")
     else:
         await state.update_data(test_name=None)
-        await state.set_state(BookingStates.group_name)
+        await state.set_state(BookingStates.midterm_choice)
         await callback.message.edit_text(
-            "Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):"
+            "Aynan qaysi turi?", reply_markup=midterm_type_choice_kb()
         )
+    await callback.answer()
+
+
+@router.callback_query(BookingStates.midterm_choice, F.data.startswith("midterm_choice:"))
+async def choose_midterm_type(callback: CallbackQuery, state: FSMContext):
+    choice = callback.data.split(":", 1)[1]
+    await state.update_data(test_type=choice)
+    await state.set_state(BookingStates.group_name)
+    await callback.message.edit_text(f"Test turi: {choice} ✅")
+    await callback.message.answer("Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):")
     await callback.answer()
 
 
