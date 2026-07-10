@@ -44,15 +44,18 @@ async def _send_bookings(send):
     if not bookings:
         await send("Faol buyurtmalar yo'q.")
         return
-    lines = ["📅 <b>Faol buyurtmalar:</b>\n"]
     for b in bookings:
         status_emoji = "🟡" if b["status"] == "pending" else "🟢"
-        examiner = f" — {b['examiner_name']}" if b["examiner_name"] else " — kutilmoqda"
-        lines.append(
-            f"{status_emoji} {b['exam_date']} {b['exam_time']} | {b['branch']} | "
-            f"{b['teacher_name']} | {b['group_name']}{examiner}"
+        examiner = f"\nExaminer: {b['examiner_name']}" if b["examiner_name"] else "\nExaminer: kutilmoqda"
+        text = (
+            f"{status_emoji} <b>{b['exam_date']} {b['exam_time']}</b>\n"
+            f"Filial: {b['branch']}\nUstoz: {b['teacher_name']}\n"
+            f"Guruh: {b['group_name']}{examiner}"
         )
-    await send("\n".join(lines))
+        builder = InlineKeyboardBuilder()
+        builder.button(text="❌ Bekor qilish", callback_data=f"cancel_booking:{b['id']}")
+        builder.adjust(1)
+        await send(text, reply_markup=builder.as_markup())
 
 
 async def _send_staff(send):
@@ -320,6 +323,67 @@ async def remove_staff_yes(callback: CallbackQuery):
 @router.callback_query(F.data == "remove_staff_no")
 async def remove_staff_no(callback: CallbackQuery):
     await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cancel_booking:"))
+async def cancel_booking_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    booking_id = int(callback.data.split(":")[1])
+    booking = await db.get_booking(booking_id)
+    if not booking:
+        await callback.answer("Topilmadi.", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, bekor qilish", callback_data=f"cancel_booking_yes:{booking_id}")
+    builder.button(text="◀️ Yo'q", callback_data="cancel_booking_no")
+    builder.adjust(2)
+    await callback.message.answer(
+        f"<b>{booking['teacher_name']}</b> ning {booking['exam_date']} {booking['exam_time']} "
+        f"dagi buyurtmasini bekor qilmoqchimisiz?",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cancel_booking_yes:"))
+async def cancel_booking_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    booking_id = int(callback.data.split(":")[1])
+    booking = await db.get_booking(booking_id)
+    await db.cancel_booking(booking_id)
+    await callback.message.edit_text("✅ Buyurtma bekor qilindi.")
+
+    try:
+        await callback.bot.send_message(
+            booking["teacher_telegram_id"],
+            f"❌ Sizning {booking['exam_date']} {booking['exam_time']} dagi imtihon "
+            f"buyurtmangiz admin tomonidan bekor qilindi.\n\nSavol uchun admin bilan bog'laning.",
+        )
+    except Exception:
+        pass
+
+    if booking["examiner_telegram_id"]:
+        try:
+            await callback.bot.send_message(
+                booking["examiner_telegram_id"],
+                f"❌ {booking['exam_date']} {booking['exam_time']} dagi imtihon "
+                f"(ustoz: {booking['teacher_name']}) admin tomonidan bekor qilindi.",
+            )
+        except Exception:
+            pass
+
+    await callback.answer("Bekor qilindi")
+
+
+@router.callback_query(F.data == "cancel_booking_no")
+async def cancel_booking_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilinmadi.")
     await callback.answer()
 
 
