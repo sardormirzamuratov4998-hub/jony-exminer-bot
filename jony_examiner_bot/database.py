@@ -353,6 +353,12 @@ async def mark_reminder_sent(booking_id: int, which: str):
         await db.commit()
 
 
+async def cancel_booking(booking_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", (booking_id,))
+        await db.commit()
+
+
 async def expire_past_bookings():
     """Imtihon sanasi+vaqti o'tib ketgan, hali pending/accepted holatidagi
     buyurtmalarni 'expired' deb belgilaydi."""
