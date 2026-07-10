@@ -122,6 +122,14 @@ def test_type_booking_kb():
     return builder.as_markup()
 
 
+def midterm_type_choice_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📕 END OF COURSE", callback_data="midterm_choice:END OF COURSE")
+    builder.button(text="📗 MIDTERM", callback_data="midterm_choice:MIDTERM")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def booking_confirm_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Yuborish", callback_data="booking_confirm")
