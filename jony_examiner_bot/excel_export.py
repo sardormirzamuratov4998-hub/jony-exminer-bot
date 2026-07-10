@@ -11,7 +11,7 @@ GREEN_LIGHT = "92D050"
 BLUE_LIGHT = "00B0F0"
 GREY = "D9D9D9"
 
-thin = Side(border_style="thin", color="000000")
+thin = Side(border_style="medium", color="000000")
 BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
 
 
@@ -98,16 +98,16 @@ def build_excel(data: dict, filepath: str):
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
         _cell(ws, r, 1, label, bold=True, fill=ORANGE)
         ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=n_cols)
-        _cell(ws, r, 3, val, bold=True)
+        _cell(ws, r, 3, val, bold=True, fill=ORANGE)
         r += 1
 
     # Test type / section header row
     if is_unit:
         _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
-        _cell(ws, r, 2, data["level_name"], bold=True)
+        _cell(ws, r, 2, data["level_name"], bold=True, fill=ORANGE)
         ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=n_cols)
-        _cell(ws, r, 4, str(data["max_score"]), bold=True)
+        _cell(ws, r, 4, str(data["max_score"]), bold=True, fill=ORANGE)
         r += 1
 
         headers = ["#", "SURNAME", "NAME", "TOTAL", "PERCENT", "STATUS"]
@@ -115,14 +115,14 @@ def build_excel(data: dict, filepath: str):
         sec = data["sections"]
         _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
         ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
-        _cell(ws, r, 2, data["level_name"], bold=True)
-        _cell(ws, r, 4, sec["listening"], bold=True)
-        _cell(ws, r, 5, sec["reading"], bold=True)
-        _cell(ws, r, 6, sec["writing"], bold=True)
-        _cell(ws, r, 7, sec["speaking"], bold=True)
+        _cell(ws, r, 2, data["level_name"], bold=True, fill=ORANGE)
+        _cell(ws, r, 4, sec["listening"], bold=True, fill=ORANGE)
+        _cell(ws, r, 5, sec["reading"], bold=True, fill=ORANGE)
+        _cell(ws, r, 6, sec["writing"], bold=True, fill=ORANGE)
+        _cell(ws, r, 7, sec["speaking"], bold=True, fill=ORANGE)
         total_max = sum(sec.values())
         ws.merge_cells(start_row=r, start_column=8, end_row=r, end_column=9)
-        _cell(ws, r, 8, total_max, bold=True)
+        _cell(ws, r, 8, total_max, bold=True, fill=ORANGE)
         r += 1
 
         headers = ["#", "SURNAME", "NAME", "LISTENING", "READING", "WRITING", "SPEAKING", "TOTAL", "STATUS"]
@@ -195,15 +195,15 @@ def build_excel(data: dict, filepath: str):
         passing_percent = 0
 
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols - 2)
-    _cell(ws, r, 1, "GROUP INDEX", bold=True, fill=YELLOW, align="right")
+    _cell(ws, r, 1, "GROUP INDEX", bold=True, fill=ORANGE, align="right")
     ws.merge_cells(start_row=r, start_column=n_cols - 1, end_row=r, end_column=n_cols)
     _cell(ws, r, n_cols - 1, f"{avg_percent:.0f}%", bold=True, fill=group_index_color(avg_percent))
     r += 1
 
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols - 2)
-    _cell(ws, r, 1, "PASSING INDEX", bold=True, fill=YELLOW, align="right")
+    _cell(ws, r, 1, "PASSING INDEX", bold=True, fill=ORANGE, align="right")
     ws.merge_cells(start_row=r, start_column=n_cols - 1, end_row=r, end_column=n_cols)
-    _cell(ws, r, n_cols - 1, f"{passing_percent:.1f}%", bold=True, fill=YELLOW)
+    _cell(ws, r, n_cols - 1, f"{passing_percent:.1f}%", bold=True, fill=ORANGE)
     r += 1
 
     # Column widths
