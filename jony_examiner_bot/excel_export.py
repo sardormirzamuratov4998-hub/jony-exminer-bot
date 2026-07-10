@@ -11,7 +11,7 @@ GREEN_LIGHT = "92D050"
 BLUE_LIGHT = "00B0F0"
 GREY = "D9D9D9"
 
-thin = Side(border_style="medium", color="000000")
+thin = Side(border_style="thin", color="000000")
 BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
 
 
@@ -58,6 +58,13 @@ def _cell(ws, row, col, value, bold=False, fill=None, align="center", size=11, f
     return c
 
 
+def _merge_bordered(ws, row, col1, col2, fill=None):
+    """Katakchalarni birlashtiradi. Excel/LibreOffice birlashtirilgan katakcha
+    uchun faqat chap-yuqori (anchor) katakcha stilini ishlatadi, shuning uchun
+    faqat shu katakchaga chegara/fon berish yetarli."""
+    ws.merge_cells(start_row=row, start_column=col1, end_row=row, end_column=col2)
+
+
 def build_excel(data: dict, filepath: str):
     """
     data = {
@@ -74,13 +81,14 @@ def build_excel(data: dict, filepath: str):
     wb = Workbook()
     ws = wb.active
     ws.title = "Natijalar"
+    ws.sheet_view.showGridLines = False
 
     is_unit = data["test_type"] == "unit"
     n_cols = 6 if is_unit else 9
     last_col_letter = get_column_letter(n_cols)
 
     # Title
-    ws.merge_cells(f"A1:{last_col_letter}1")
+    _merge_bordered(ws, 1, 1, n_cols)
     _cell(ws, 1, 1, "JONY ACADEMY - EXAM RESULTS", bold=True, size=16)
     ws.row_dimensions[1].height = 28
 
@@ -95,18 +103,18 @@ def build_excel(data: dict, filepath: str):
 
     r = 2
     for label, val in header_rows:
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+        _merge_bordered(ws, r, 1, 2, fill=ORANGE)
         _cell(ws, r, 1, label, bold=True, fill=ORANGE)
-        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=n_cols)
+        _merge_bordered(ws, r, 3, n_cols, fill=ORANGE)
         _cell(ws, r, 3, val, bold=True, fill=ORANGE)
         r += 1
 
     # Test type / section header row
     if is_unit:
         _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
-        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
+        _merge_bordered(ws, r, 2, 3, fill=ORANGE)
         _cell(ws, r, 2, data["level_name"], bold=True, fill=ORANGE)
-        ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=n_cols)
+        _merge_bordered(ws, r, 4, n_cols, fill=ORANGE)
         _cell(ws, r, 4, str(data["max_score"]), bold=True, fill=ORANGE)
         r += 1
 
@@ -114,14 +122,14 @@ def build_excel(data: dict, filepath: str):
     else:
         sec = data["sections"]
         _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
-        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
+        _merge_bordered(ws, r, 2, 3, fill=ORANGE)
         _cell(ws, r, 2, data["level_name"], bold=True, fill=ORANGE)
         _cell(ws, r, 4, sec["listening"], bold=True, fill=ORANGE)
         _cell(ws, r, 5, sec["reading"], bold=True, fill=ORANGE)
         _cell(ws, r, 6, sec["writing"], bold=True, fill=ORANGE)
         _cell(ws, r, 7, sec["speaking"], bold=True, fill=ORANGE)
         total_max = sum(sec.values())
-        ws.merge_cells(start_row=r, start_column=8, end_row=r, end_column=9)
+        _merge_bordered(ws, r, 8, 9, fill=ORANGE)
         _cell(ws, r, 8, total_max, bold=True, fill=ORANGE)
         r += 1
 
@@ -133,13 +141,13 @@ def build_excel(data: dict, filepath: str):
     r += 1
 
     all_students = data["students"]
-    # Checkbox orqali "QAYTA TOPSHIRMOQDA" deb belgilanganlar (first_time=False)
-    # asosiy jadvalda + GROUP/PASSING INDEKSGA kiradi.
+    # Checkbox orqali belgilanmaganlar (first_time=False) asosiy jadvalda +
+    # GROUP/PASSING INDEKSGA kiradi.
     index_students = sorted(
         [s for s in all_students if not s["first_time"]],
         key=lambda s: s["percent"], reverse=True,
     )
-    # Belgilanmaganlar (first_time=True) — bitta qator tashlab, pastda ALOHIDA
+    # Belgilanganlar (first_time=True) — bitta qator tashlab, pastda ALOHIDA
     # jadvalda ko'rsatiladi, indeksga kirmaydi.
     separate_students = sorted(
         [s for s in all_students if s["first_time"]],
@@ -175,7 +183,7 @@ def build_excel(data: dict, filepath: str):
         write_student(r, idx, s)
         r += 1
 
-    # Alohida jadval: BIRINCHI MARTA topshirganlar (checkbox belgilanmagan)
+    # Alohida jadval: BIRINCHI MARTA topshirganlar (checkbox belgilangan)
     # — asosiy jadvaldan bitta bo'sh qator tashlab, GROUP/PASSING INDEXdan OLDIN
     # ko'rsatiladi, lekin indeksga kirmaydi
     if separate_students:
@@ -184,7 +192,7 @@ def build_excel(data: dict, filepath: str):
             write_student(r, idx, s)
             r += 1
 
-    # Group / Passing index — faqat checkbox bilan belgilangan (first_time=False) asosida
+    # Group / Passing index — faqat checkbox bilan belgilanmagan (first_time=False) asosida
     r += 1
     if index_students:
         avg_percent = sum(s["percent"] for s in index_students) / len(index_students)
@@ -194,15 +202,16 @@ def build_excel(data: dict, filepath: str):
         avg_percent = 0
         passing_percent = 0
 
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols - 2)
+    _merge_bordered(ws, r, 1, n_cols - 2, fill=ORANGE)
     _cell(ws, r, 1, "GROUP INDEX", bold=True, fill=ORANGE, align="right")
-    ws.merge_cells(start_row=r, start_column=n_cols - 1, end_row=r, end_column=n_cols)
-    _cell(ws, r, n_cols - 1, f"{avg_percent:.0f}%", bold=True, fill=group_index_color(avg_percent))
+    gi_color = group_index_color(avg_percent)
+    _merge_bordered(ws, r, n_cols - 1, n_cols, fill=gi_color)
+    _cell(ws, r, n_cols - 1, f"{avg_percent:.0f}%", bold=True, fill=gi_color)
     r += 1
 
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols - 2)
+    _merge_bordered(ws, r, 1, n_cols - 2, fill=ORANGE)
     _cell(ws, r, 1, "PASSING INDEX", bold=True, fill=ORANGE, align="right")
-    ws.merge_cells(start_row=r, start_column=n_cols - 1, end_row=r, end_column=n_cols)
+    _merge_bordered(ws, r, n_cols - 1, n_cols, fill=ORANGE)
     _cell(ws, r, n_cols - 1, f"{passing_percent:.1f}%", bold=True, fill=ORANGE)
     r += 1
 
