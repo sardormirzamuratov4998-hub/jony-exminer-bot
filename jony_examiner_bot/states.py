@@ -52,6 +52,7 @@ class BookingStates(StatesGroup):
     exam_time = State()
     test_type = State()
     unit_name = State()
+    midterm_choice = State()
     group_name = State()
     students_count = State()
     confirm = State()
