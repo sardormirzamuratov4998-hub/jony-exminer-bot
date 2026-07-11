@@ -224,6 +224,15 @@ def booking_branch_kb(branches):
     return builder.as_markup()
 
 
+def repeat_group_match_kb(matches):
+    """Qisman qidiruvda bir nechta guruh topilsa, tanlov uchun tugmalar (index bo'yicha)."""
+    builder = InlineKeyboardBuilder()
+    for i, name in enumerate(matches):
+        builder.button(text=name, callback_data=f"repeatgroup:{i}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 REPEAT_FIELD_LABELS = {
     "branch": "🏢 Filial",
     "exam_date": "📅 Sana",
