@@ -706,6 +706,20 @@ async def get_all_pending_bookings():
         return [dict(r) for r in rows]
 
 
+async def get_pending_bookings_by_branch(branch: str):
+    """Berilgan filial uchun hali hech kim qabul qilmagan (pending) buyurtmalar.
+    Examiner o'tkazib yuborgan yoki o'sha payt hali ro'yxatdan o'tmagan bo'lsa,
+    'Kutilayotgan buyurtmalar' tugmasi orqali shu ro'yxatni ko'rib qabul qilishi uchun."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM bookings WHERE status='pending' AND branch=? ORDER BY exam_date, exam_time",
+            (branch,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def mark_escalated(booking_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE bookings SET escalated=1 WHERE id=?", (booking_id,))
