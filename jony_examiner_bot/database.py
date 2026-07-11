@@ -476,39 +476,91 @@ async def get_examiner_upcoming_bookings(examiner_telegram_id: int):
 
 
 # ---------- 5) SAQLANGAN O'QUVCHILAR RO'YXATI (guruh bo'yicha) ----------
+# Guruh nomi katta-kichik harf/bo'sh joyларга qaramay bir xil deb hisoblanadi.
+# Eski (oldin turli xil harf bilan saqlangan) yozuvlar bilan ham mos ishlashi
+# uchun saqlashda ustunni o'zgartirmasdan, har doim mavjud yozuvni CASE-INSENSITIVE
+# qidirib topamiz va aynan o'sha qatorni yangilaymiz.
+
+def _norm_group(group_name: str) -> str:
+    return (group_name or "").strip().lower()
+
+
+async def _find_group_row(db, branch: str, group_name: str):
+    """Berilgan filial + guruh nomiga case-insensitive mos keladigan qatorni topadi."""
+    key = _norm_group(group_name)
+    cur = await db.execute(
+        "SELECT id, group_name, students_json FROM saved_group_students WHERE branch=?",
+        (branch,),
+    )
+    rows = await cur.fetchall()
+    for row in rows:
+        if _norm_group(row[1]) == key:
+            return row  # (id, group_name, students_json)
+    return None
+
 
 async def get_saved_group_students(branch: str, group_name: str):
-    """Shu filial + guruh nomi uchun oldin saqlangan o'quvchilar (surname/name), yoki bo'sh ro'yxat."""
+    """Shu filial + guruh nomi uchun oldin saqlangan o'quvchilar (surname/name), yoki bo'sh ro'yxat.
+    Guruh nomi katta-kichik harfga qaramay solishtiriladi."""
     if not branch or not group_name:
         return []
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT students_json FROM saved_group_students WHERE branch=? AND group_name=?",
-            (branch, group_name),
-        )
-        row = await cur.fetchone()
+        row = await _find_group_row(db, branch, group_name)
         if not row:
             return []
         try:
-            return json.loads(row[0])
+            return json.loads(row[2])
         except (json.JSONDecodeError, TypeError):
             return []
 
 
-async def save_group_students(branch: str, group_name: str, students: list):
-    """Shu filial + guruh uchun o'quvchilar ro'yxatini saqlaydi/yangilaydi (surname/name juftliklari)."""
+async def _set_group_students(branch: str, group_name: str, students: list):
+    """Ro'yxatni TO'LIQ ALMASHTIRIB saqlaydi (ichki funksiya — merge qilmaydi).
+    Mavjud (case-insensitive mos) qator bo'lsa shuni yangilaydi, bo'lmasa yangi qo'shadi."""
     if not branch or not group_name:
         return
     students_json = json.dumps(students, ensure_ascii=False)
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """INSERT INTO saved_group_students (branch, group_name, students_json, updated_at)
-               VALUES (?,?,?,?)
-               ON CONFLICT(branch, group_name) DO UPDATE SET
-                 students_json=excluded.students_json, updated_at=excluded.updated_at""",
-            (branch, group_name, students_json, now_tashkent().isoformat()),
-        )
+        existing = await _find_group_row(db, branch, group_name)
+        if existing:
+            await db.execute(
+                "UPDATE saved_group_students SET students_json=?, updated_at=? WHERE id=?",
+                (students_json, now_tashkent().isoformat(), existing[0]),
+            )
+        else:
+            await db.execute(
+                """INSERT INTO saved_group_students (branch, group_name, students_json, updated_at)
+                   VALUES (?,?,?,?)""",
+                (branch, group_name, students_json, now_tashkent().isoformat()),
+            )
         await db.commit()
+
+
+async def save_group_students(branch: str, group_name: str, students: list):
+    """Shu filial + guruh uchun o'quvchilar ro'yxatini BIRLASHTIRIB (merge) saqlaydi:
+    yangi kiritilgan o'quvchilar eski ro'yxatga QO'SHILADI (takrorlanmasdan),
+    lekin eski o'quvchilar o'chib ketmaydi. Faqat "guruhdan o'chirish" funksiyasi
+    orqaligina o'quvchi butunlay olib tashlanadi."""
+    if not branch or not group_name:
+        return
+    existing = await get_saved_group_students(branch, group_name)
+    seen = {(s["surname"].strip().lower(), s["name"].strip().lower()) for s in existing}
+    merged = list(existing)
+    for s in students:
+        key = (s["surname"].strip().lower(), s["name"].strip().lower())
+        if key not in seen:
+            seen.add(key)
+            merged.append({"surname": s["surname"], "name": s["name"]})
+    await _set_group_students(branch, group_name, merged)
+
+
+async def remove_students_from_group(branch: str, group_name: str, indices_to_remove: list):
+    """Saqlangan guruh ro'yxatidan berilgan index'dagi o'quvchi(lar)ni o'chiradi
+    va yangilangan ro'yxatni qaytaradi."""
+    current = await get_saved_group_students(branch, group_name)
+    remaining = [s for i, s in enumerate(current) if i not in set(indices_to_remove)]
+    await _set_group_students(branch, group_name, remaining)
+    return remaining
 
 
 # ---------- 6) ADMIN QIDIRUV/FILTR ----------
