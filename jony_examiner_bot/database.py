@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 DB_PATH = "jony_bookings.db"
 
 DEFAULT_BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
+DEFAULT_TEST_TYPES = ["UNIT TEST", "END OF COURSE", "MIDTERM"]
 
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 
@@ -117,6 +118,13 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS test_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+        """)
         await db.commit()
 
         cur = await db.execute("SELECT COUNT(*) FROM branches")
@@ -126,6 +134,17 @@ async def init_db():
             for name in DEFAULT_BRANCHES:
                 await db.execute(
                     "INSERT OR IGNORE INTO branches (name, created_at) VALUES (?,?)",
+                    (name, now_iso),
+                )
+            await db.commit()
+
+        cur = await db.execute("SELECT COUNT(*) FROM test_types")
+        (count,) = await cur.fetchone()
+        if count == 0:
+            now_iso = now_tashkent().isoformat()
+            for name in DEFAULT_TEST_TYPES:
+                await db.execute(
+                    "INSERT OR IGNORE INTO test_types (name, created_at) VALUES (?,?)",
                     (name, now_iso),
                 )
             await db.commit()
@@ -337,6 +356,38 @@ async def add_branch(name: str) -> bool:
 async def remove_branch(name: str):
     async with aiosqlite.connect(DB_PATH) as db_:
         await db_.execute("DELETE FROM branches WHERE name=?", (name,))
+        await db_.commit()
+
+
+# ---------- TEST TURLARI (TEST TYPES) ----------
+
+async def get_test_types() -> list:
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute("SELECT name FROM test_types ORDER BY id")
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
+async def add_test_type(name: str) -> bool:
+    """Yangi test turi qo'shadi. Agar shu nomdagi tur allaqachon bo'lsa, False qaytaradi."""
+    name = name.strip()
+    if not name:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db_:
+        try:
+            await db_.execute(
+                "INSERT INTO test_types (name, created_at) VALUES (?,?)",
+                (name, now_tashkent().isoformat()),
+            )
+            await db_.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def remove_test_type(name: str):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("DELETE FROM test_types WHERE name=?", (name,))
         await db_.commit()
 
 
