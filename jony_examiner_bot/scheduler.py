@@ -14,7 +14,7 @@ def _parse_dt(exam_date: str, exam_time: str) -> datetime:
 
 
 async def check_reminders(bot):
-    now = datetime.now()
+    now = db.now_tashkent()
     bookings = await db.get_accepted_bookings_needing_reminder()
     for b in bookings:
         try:
@@ -105,6 +105,10 @@ def start_scheduler(bot):
     scheduler.add_job(check_reminders, "interval", minutes=1, args=[bot])
     scheduler.add_job(check_escalations, "interval", minutes=30, args=[bot])
     scheduler.add_job(check_expired_bookings, "interval", minutes=10, args=[bot])
-    scheduler.add_job(send_daily_report, CronTrigger(hour=18, minute=0), args=[bot])
+    scheduler.add_job(
+        send_daily_report,
+        CronTrigger(hour=18, minute=0, timezone=db.TASHKENT_TZ),
+        args=[bot],
+    )
     scheduler.start()
     return scheduler
