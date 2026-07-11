@@ -248,6 +248,18 @@ async def get_active_bookings():
         return [dict(r) for r in rows]
 
 
+async def get_teacher_bookings(telegram_id: int, limit: int = 20):
+    """Ustozning barcha buyurtmalari (pending/accepted/cancelled/expired) — eng oxirgisi birinchi."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            "SELECT * FROM bookings WHERE teacher_telegram_id=? ORDER BY created_at DESC LIMIT ?",
+            (telegram_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_examiners_by_branch(branch: str, status: str = "active"):
     """'active' va eski 'approved' statusli examinerlarni ham qamrab oladi (eski ma'lumotlar bilan mos)."""
     statuses = ["active", "approved"] if status == "active" else [status]
