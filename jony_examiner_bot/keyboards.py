@@ -158,18 +158,10 @@ def examiner_menu_kb():
     return builder.as_markup(resize_keyboard=True)
 
 
-def test_type_booking_kb():
+def test_type_booking_kb(test_types):
     builder = InlineKeyboardBuilder()
-    builder.button(text="📘 UNIT TEST", callback_data="booking_type:UNIT TEST")
-    builder.button(text="📗 END OF COURSE / MIDTERM", callback_data="booking_type:END OF COURSE / MIDTERM")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def midterm_type_choice_kb():
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📕 END OF COURSE", callback_data="midterm_choice:END OF COURSE")
-    builder.button(text="📗 MIDTERM", callback_data="midterm_choice:MIDTERM")
+    for t in test_types:
+        builder.button(text=f"📘 {t}", callback_data=f"booking_type:{t}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -261,6 +253,7 @@ def admin_panel_kb():
     builder.button(text="📈 Statistika (30 kun)", callback_data="admin_stats")
     builder.button(text="👤 Xodimlar (o'chirish)", callback_data="admin_staff")
     builder.button(text="🏢 Filiallarni boshqarish", callback_data="admin_branches")
+    builder.button(text="🧪 Test turlarini boshqarish", callback_data="admin_test_types")
     builder.button(text="🛡 Adminlar ro'yxati", callback_data="admin_admins")
     builder.button(text="➕ Admin qo'shish", callback_data="admin_add")
     builder.button(text="📊 Kunlik hisobot (hozir)", callback_data="admin_daily_report")
@@ -284,5 +277,22 @@ def branch_delete_confirm_kb(name: str):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Ha, o'chirish", callback_data=f"branch_del_yes:{name}")
     builder.button(text="❌ Bekor qilish", callback_data="branch_del_no")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def test_type_manage_kb(test_types):
+    builder = InlineKeyboardBuilder()
+    for t in test_types:
+        builder.button(text=f"🗑 {t}", callback_data=f"testtype_del:{t}")
+    builder.button(text="➕ Yangi test turi qo'shish", callback_data="testtype_add")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def test_type_delete_confirm_kb(name: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, o'chirish", callback_data=f"testtype_del_yes:{name}")
+    builder.button(text="❌ Bekor qilish", callback_data="testtype_del_no")
     builder.adjust(2)
     return builder.as_markup()
