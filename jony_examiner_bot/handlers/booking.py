@@ -8,7 +8,6 @@ import database as db
 from states import BookingStates
 from keyboards import (
     test_type_booking_kb,
-    midterm_type_choice_kb,
     booking_confirm_kb,
     accept_booking_kb,
     cancel_kb,
@@ -132,7 +131,8 @@ async def get_exam_time(message: Message, state: FSMContext):
         return
     await state.update_data(exam_time=message.text.strip())
     await state.set_state(BookingStates.test_type)
-    await message.answer("Test turini tanlang:", reply_markup=test_type_booking_kb())
+    test_types = await db.get_test_types()
+    await message.answer("Test turini tanlang:", reply_markup=test_type_booking_kb(test_types))
 
 
 @router.callback_query(BookingStates.test_type, F.data.startswith("booking_type:"))
@@ -144,20 +144,9 @@ async def get_test_type(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Unit raqamini kiriting (masalan: Unit 7):")
     else:
         await state.update_data(test_name=None)
-        await state.set_state(BookingStates.midterm_choice)
-        await callback.message.edit_text(
-            "Aynan qaysi turi?", reply_markup=midterm_type_choice_kb()
-        )
-    await callback.answer()
-
-
-@router.callback_query(BookingStates.midterm_choice, F.data.startswith("midterm_choice:"))
-async def choose_midterm_type(callback: CallbackQuery, state: FSMContext):
-    choice = callback.data.split(":", 1)[1]
-    await state.update_data(test_type=choice)
-    await state.set_state(BookingStates.group_name)
-    await callback.message.edit_text(f"Test turi: {choice} ✅")
-    await callback.message.answer("Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):")
+        await state.set_state(BookingStates.group_name)
+        await callback.message.edit_text(f"Test turi: {test_type} ✅")
+        await callback.message.answer("Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):")
     await callback.answer()
 
 
@@ -351,7 +340,8 @@ async def _advance_repeat_queue(answer_func, telegram_id: int, state: FSMContext
         await answer_func("Imtihon vaqtini kiriting (masalan: 08:00):")
     elif field == "test_type":
         await state.set_state(BookingStates.repeat_test_type)
-        await answer_func("Test turini tanlang:", reply_markup=test_type_booking_kb())
+        test_types = await db.get_test_types()
+        await answer_func("Test turini tanlang:", reply_markup=test_type_booking_kb(test_types))
     elif field == "students_count":
         await state.set_state(BookingStates.repeat_students_count)
         await answer_func("O'quvchilar sonini kiriting:")
@@ -485,18 +475,11 @@ async def get_repeat_test_type(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("Unit raqamini kiriting (masalan: Unit 7):")
     else:
         await state.update_data(test_name=None)
-        await state.set_state(BookingStates.repeat_midterm_choice)
-        await callback.message.edit_text("Aynan qaysi turi?", reply_markup=midterm_type_choice_kb())
+        await callback.message.edit_text(f"Test turi: {test_type} ✅")
+        await callback.answer()
+        await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
+        return
     await callback.answer()
-
-
-@router.callback_query(BookingStates.repeat_midterm_choice, F.data.startswith("midterm_choice:"))
-async def choose_repeat_midterm_type(callback: CallbackQuery, state: FSMContext):
-    choice = callback.data.split(":", 1)[1]
-    await state.update_data(test_type=choice)
-    await callback.message.edit_text(f"Test turi: {choice} ✅")
-    await callback.answer()
-    await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
 
 
 @router.message(BookingStates.repeat_unit_name)
