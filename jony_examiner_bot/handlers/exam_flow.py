@@ -14,6 +14,7 @@ from keyboards import (
     build_main_menu_kb,
     entry_mode_kb,
     retake_checkbox_kb,
+    manage_group_kb,
 )
 from excel_export import build_excel
 
@@ -357,6 +358,79 @@ async def entry_mode_saved(callback: CallbackQuery, state: FSMContext):
     await state.update_data(saved_queue=list(saved), students=[])
     await callback.message.edit_text(f"📂 Saqlangan ro'yxatdan {len(saved)} ta o'quvchi yuklandi.")
     await _advance_saved_queue(callback.message, state)
+    await callback.answer()
+
+
+# ---------- SAQLANGAN GURUHDAN O'QUVCHINI O'CHIRISH ----------
+
+@router.callback_query(ExamStates.entry_mode_choice, F.data == "entry_mode:manage")
+async def entry_mode_manage(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    saved = data.get("saved_students_available") or []
+    if not saved:
+        await callback.answer("Saqlangan ro'yxat topilmadi.", show_alert=True)
+        return
+    await state.update_data(manage_selected=[])
+    await state.set_state(ExamStates.manage_group_marking)
+    await callback.message.edit_text(
+        "Guruhdan qaysi o'quvchi(lar)ni O'CHIRMOQCHISIZ?\n\n"
+        "🗑 belgilaganlaringiz keyingi safar bu guruh uchun taklif qilinmaydi.",
+        reply_markup=manage_group_kb(saved, []),
+    )
+    await callback.answer()
+
+
+@router.callback_query(ExamStates.manage_group_marking, F.data.startswith("manage_toggle:"))
+async def manage_toggle(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    selected = set(data.get("manage_selected", []))
+    if idx in selected:
+        selected.remove(idx)
+    else:
+        selected.add(idx)
+    selected = list(selected)
+    await state.update_data(manage_selected=selected)
+    saved = data.get("saved_students_available") or []
+    await callback.message.edit_reply_markup(reply_markup=manage_group_kb(saved, selected))
+    await callback.answer()
+
+
+@router.callback_query(ExamStates.manage_group_marking, F.data == "manage_back")
+async def manage_back(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    saved_count = len(data.get("saved_students_available") or [])
+    await state.set_state(ExamStates.entry_mode_choice)
+    await callback.message.edit_text(
+        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb(saved_count)
+    )
+    await callback.answer()
+
+
+@router.callback_query(ExamStates.manage_group_marking, F.data == "manage_confirm")
+async def manage_confirm(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    selected = data.get("manage_selected", [])
+    saved = data.get("saved_students_available") or []
+    branch = data.get("saved_branch")
+    group_name = data.get("level_name", "")
+
+    if not selected:
+        await callback.answer("Hech kim belgilanmagan.", show_alert=True)
+        return
+
+    removed_names = [f"{saved[i]['surname']} {saved[i]['name']}" for i in selected]
+    remaining = await db.remove_students_from_group(branch, group_name, selected)
+    await state.update_data(saved_students_available=remaining, manage_selected=[])
+
+    text = "✅ Guruhdan o'chirildi:\n" + "\n".join(f"• {n}" for n in removed_names)
+    text += f"\n\nGuruhda qoldi: {len(remaining)} ta o'quvchi."
+    await callback.message.edit_text(text)
+
+    await state.set_state(ExamStates.entry_mode_choice)
+    await callback.message.answer(
+        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb(len(remaining))
+    )
     await callback.answer()
 
 
