@@ -13,8 +13,29 @@ def _parse_dt(exam_date: str, exam_time: str) -> datetime:
     return datetime.strptime(f"{exam_date} {exam_time}", "%d.%m.%Y %H:%M")
 
 
+def _format_hours(hours: float) -> str:
+    if hours == int(hours) and hours >= 1:
+        return f"{int(hours)} soat"
+    total_minutes = round(hours * 60)
+    if total_minutes < 60:
+        return f"{total_minutes} daqiqa"
+    h, m = divmod(total_minutes, 60)
+    return f"{h} soat {m} daqiqa" if m else f"{h} soat"
+
+
 async def check_reminders(bot):
     now = db.now_tashkent()
+
+    hours_str = await db.get_setting("reminder_hours_before")
+    try:
+        hours_before = float(hours_str) if hours_str else 1.0
+    except (TypeError, ValueError):
+        hours_before = 1.0
+    if hours_before <= 0:
+        hours_before = 1.0
+    target_minutes = hours_before * 60
+    label = _format_hours(hours_before)
+
     bookings = await db.get_accepted_bookings_needing_reminder()
     for b in bookings:
         try:
@@ -23,17 +44,17 @@ async def check_reminders(bot):
             continue
 
         minutes_left = (exam_dt - now).total_seconds() / 60
-        if not b["reminder_1h_sent"] and 0 <= minutes_left <= 65 and minutes_left >= 55:
+        if not b["reminder_1h_sent"] and (target_minutes - 5) <= minutes_left <= (target_minutes + 5):
             try:
                 await bot.send_message(
                     b["examiner_telegram_id"],
-                    f"⏰ Eslatma: 1 soatdan so'ng imtihon bor!\n\n"
+                    f"⏰ Eslatma: {label}dan so'ng imtihon bor!\n\n"
                     f"Ustoz: {b['teacher_name']}\nFilial: {b['branch']}\n"
                     f"Sana: {b['exam_date']}\nVaqt: {b['exam_time']}\n"
                     f"Guruh: {b['group_name']}",
                 )
             except Exception:
-                logger.exception("1 soatlik eslatma yuborilmadi")
+                logger.exception("Eslatma yuborilmadi")
             await db.mark_reminder_sent(b["id"], "1h")
 
         if not b["reminder_time_sent"] and -5 <= minutes_left <= 5:
