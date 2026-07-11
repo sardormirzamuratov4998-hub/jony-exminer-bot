@@ -963,6 +963,25 @@ async def idx_confirm(callback: CallbackQuery, state: FSMContext):
     is_adm = await db.is_admin(callback.from_user.id)
     await callback.message.edit_text("✅ Excel fayl tayyorlanmoqda...")
     await callback.message.answer_document(FSInputFile(filename), caption="Imtihon natijalari tayyor 📊")
+
+    # END OF COURSE / MIDTERM natijalari (test_type != "unit") — excel bir vaqtda
+    # o'quv bo'lim rahbariga ham, filialdan qat'iy nazar, jo'natiladi
+    if data["test_type"] != "unit":
+        study_heads = await db.get_active_study_heads()
+        if study_heads:
+            caption = (
+                f"📊 Imtihon natijalari — {data.get('test_name') or 'MIDTERM/END OF COURSE'}\n"
+                f"Filial: {branch or '-'}\nExaminer: {data.get('examiner')}\n"
+                f"Guruh: {data.get('level_name')}"
+            )
+            for sh in study_heads:
+                try:
+                    await callback.bot.send_document(
+                        sh["telegram_id"], FSInputFile(filename), caption=caption
+                    )
+                except Exception:
+                    pass
+
     await callback.message.answer(
         "Yangi test kiritish uchun tugmani bosing:",
         reply_markup=build_main_menu_kb("EXAMINER", is_adm),
