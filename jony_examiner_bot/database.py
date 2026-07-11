@@ -87,6 +87,15 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS study_head_allowed (
+                telegram_id INTEGER PRIMARY KEY,
+                full_name TEXT,
+                username TEXT,
+                added_by INTEGER,
+                added_at TEXT
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS saved_group_students (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 branch TEXT NOT NULL,
@@ -196,6 +205,50 @@ async def list_admins():
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
         cur = await db_.execute("SELECT * FROM admins")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------- O'QUV BO'LIM RAHBARI (STUDY HEAD) RUXSATLARI ----------
+# Bu lavozimni faqat admin ruxsat bergan odam ola oladi (adminlar tizimiga o'xshash).
+
+async def is_study_head_allowed(telegram_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute(
+            "SELECT 1 FROM study_head_allowed WHERE telegram_id=?", (telegram_id,)
+        )
+        return await cur.fetchone() is not None
+
+
+async def add_study_head_allowed(telegram_id: int, full_name: str = None, username: str = None, added_by: int = None):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute(
+            "INSERT OR IGNORE INTO study_head_allowed (telegram_id, full_name, username, added_by, added_at) "
+            "VALUES (?,?,?,?,?)",
+            (telegram_id, full_name, username, added_by, now_tashkent().isoformat()),
+        )
+        await db_.commit()
+
+
+async def remove_study_head_allowed(telegram_id: int):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("DELETE FROM study_head_allowed WHERE telegram_id=?", (telegram_id,))
+        await db_.commit()
+
+
+async def list_study_head_allowed():
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM study_head_allowed")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_active_study_heads():
+    """STUDY_HEAD rolidagi faol foydalanuvchilar — filialdan qat'iy nazar."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM users WHERE role='STUDY_HEAD' AND status='active'")
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
