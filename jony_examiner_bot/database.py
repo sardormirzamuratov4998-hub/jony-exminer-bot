@@ -1,5 +1,6 @@
 import aiosqlite
 import json
+import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -125,6 +126,23 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS booking_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                field_key TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS booking_field_values (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                booking_id INTEGER NOT NULL,
+                field_key TEXT NOT NULL,
+                value TEXT,
+                UNIQUE(booking_id, field_key)
+            )
+        """)
         await db.commit()
 
         cur = await db.execute("SELECT COUNT(*) FROM branches")
@@ -199,6 +217,38 @@ async def get_setting(key: str):
         cur = await db.execute("SELECT value FROM settings WHERE key=?", (key,))
         row = await cur.fetchone()
         return row[0] if row else None
+
+
+# ---------- BAHOLASH CHEGARALARI (GRADING THRESHOLDS) ----------
+
+DEFAULT_GRADING_THRESHOLDS = {
+    "unit_excellent": 95,
+    "unit_good": 84,
+    "unit_average": 73,
+    "unit_bad": 64,
+    "midterm_pass": 60,
+}
+
+
+async def get_grading_thresholds() -> dict:
+    """Baholash chegaralari (foizda). Admin hali sozlamagan bo'lsa standart qiymatlar qaytadi."""
+    raw = await get_setting("grading_thresholds")
+    thresholds = dict(DEFAULT_GRADING_THRESHOLDS)
+    if raw:
+        try:
+            saved = json.loads(raw)
+            thresholds.update({k: v for k, v in saved.items() if k in thresholds})
+        except (ValueError, TypeError):
+            pass
+    return thresholds
+
+
+async def set_grading_threshold(key: str, value: float):
+    if key not in DEFAULT_GRADING_THRESHOLDS:
+        return
+    thresholds = await get_grading_thresholds()
+    thresholds[key] = value
+    await set_setting("grading_thresholds", json.dumps(thresholds))
 
 
 # ---------- USERS ----------
@@ -389,6 +439,79 @@ async def remove_test_type(name: str):
     async with aiosqlite.connect(DB_PATH) as db_:
         await db_.execute("DELETE FROM test_types WHERE name=?", (name,))
         await db_.commit()
+
+
+# ---------- BUYURTMA QO'SHIMCHA MAYDONLARI (BOOKING CUSTOM FIELDS) ----------
+
+def _slugify_field_key(label: str) -> str:
+    key = re.sub(r"[^a-z0-9]+", "_", label.strip().lower()).strip("_")
+    return key or "field"
+
+
+async def get_booking_fields() -> list:
+    """Admin qo'shgan qo'shimcha maydonlar — ustoz buyurtma berayotganda standart
+    maydonlardan (filial, sana, vaqt, test turi, guruh, o'quvchilar soni) tashqari
+    shu tartibda so'raladi."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM booking_fields ORDER BY id")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def add_booking_field(label: str) -> bool:
+    """Yangi qo'shimcha maydon qo'shadi. Shu nomli maydon allaqachon bo'lsa, False qaytaradi."""
+    label = label.strip()
+    if not label:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute("SELECT 1 FROM booking_fields WHERE label=?", (label,))
+        if await cur.fetchone():
+            return False
+
+        base_key = _slugify_field_key(label)
+        key = base_key
+        suffix = 2
+        while True:
+            cur = await db_.execute("SELECT 1 FROM booking_fields WHERE field_key=?", (key,))
+            if not await cur.fetchone():
+                break
+            key = f"{base_key}_{suffix}"
+            suffix += 1
+
+        await db_.execute(
+            "INSERT INTO booking_fields (field_key, label, created_at) VALUES (?,?,?)",
+            (key, label, now_tashkent().isoformat()),
+        )
+        await db_.commit()
+        return True
+
+
+async def remove_booking_field(field_key: str):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("DELETE FROM booking_fields WHERE field_key=?", (field_key,))
+        await db_.commit()
+
+
+async def set_booking_field_value(booking_id: int, field_key: str, value: str):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute(
+            """INSERT INTO booking_field_values (booking_id, field_key, value)
+               VALUES (?,?,?)
+               ON CONFLICT(booking_id, field_key) DO UPDATE SET value=excluded.value""",
+            (booking_id, field_key, value),
+        )
+        await db_.commit()
+
+
+async def get_booking_field_values(booking_id: int) -> dict:
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute(
+            "SELECT field_key, value FROM booking_field_values WHERE booking_id=?",
+            (booking_id,),
+        )
+        rows = await cur.fetchall()
+        return {r[0]: r[1] for r in rows}
 
 
 # ---------- TEACHER BRANCHES (bir nechta filialda ishlash) ----------
