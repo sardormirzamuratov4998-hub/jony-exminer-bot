@@ -290,6 +290,17 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
         except Exception:
             pass
 
+    # END OF COURSE / MIDTERM buyurtmalari filialdan qat'iy nazar
+    # o'quv bo'lim rahbariga ham yetkaziladi
+    if data["test_type"].strip().upper() in ("END OF COURSE", "MIDTERM"):
+        study_heads = await db.get_active_study_heads()
+        for sh in study_heads:
+            try:
+                sent = await callback.bot.send_message(sh["telegram_id"], text)
+                await db.add_notification(booking_id, sent.chat.id, sent.message_id)
+            except Exception:
+                pass
+
     await callback.answer()
 
 
