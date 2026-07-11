@@ -35,6 +35,11 @@ class ExamStates(StatesGroup):
     student_score_speaking = State()
     after_student = State()
 
+    # NATIJANI TUZATISH / O'CHIRISH
+    edit_list = State()
+    edit_score_unit = State()
+    edit_score_midterm = State()
+
     # RETAKE MARKING
     retake_marking = State()
     retake_manual_text = State()
