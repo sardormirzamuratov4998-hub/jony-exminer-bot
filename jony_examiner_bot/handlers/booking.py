@@ -25,6 +25,15 @@ async def _is_teacher(telegram_id: int):
     return user if user and user["role"] == "TEACHER" else None
 
 
+def _custom_fields_block(data) -> str:
+    labels = data.get("custom_field_labels") or {}
+    answers = data.get("custom_field_answers") or {}
+    if not answers:
+        return ""
+    lines = [f"{labels.get(key, key)}: {value}" for key, value in answers.items()]
+    return "\n" + "\n".join(lines)
+
+
 def _booking_summary(user, data) -> str:
     return (
         "📋 <b>Buyurtma ma'lumotlari:</b>\n\n"
@@ -35,8 +44,9 @@ def _booking_summary(user, data) -> str:
         f"Test turi: {data['test_type']}"
         + (f" ({data['test_name']})" if data.get("test_name") else "")
         + f"\nGuruh: {data['group_name']}\n"
-        f"O'quvchilar soni: {data['students_count']}\n\n"
-        "Yuborishni tasdiqlaysizmi?"
+        f"O'quvchilar soni: {data['students_count']}"
+        + _custom_fields_block(data)
+        + "\n\nYuborishni tasdiqlaysizmi?"
     )
 
 
@@ -164,17 +174,56 @@ async def get_group_name(message: Message, state: FSMContext):
     await message.answer("O'quvchilar sonini kiriting:")
 
 
+async def _go_to_confirm(answer_func, telegram_id: int, state: FSMContext):
+    data = await state.get_data()
+    user = await db.get_user(telegram_id)
+    await state.set_state(BookingStates.confirm)
+    await answer_func(_booking_summary(user, data), reply_markup=booking_confirm_kb())
+
+
+async def _ask_next_custom_field(answer_func, telegram_id: int, state: FSMContext):
+    data = await state.get_data()
+    queue = data.get("custom_field_queue") or []
+    if not queue:
+        await _go_to_confirm(answer_func, telegram_id, state)
+        return
+    label = data["custom_field_labels"][queue[0]]
+    await answer_func(f"{label}:")
+
+
 @router.message(BookingStates.students_count)
 async def get_students_count(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
         await message.answer("Faqat son kiriting:")
         return
     await state.update_data(students_count=int(message.text.strip()))
-    data = await state.get_data()
-    user = await db.get_user(message.from_user.id)
 
-    await state.set_state(BookingStates.confirm)
-    await message.answer(_booking_summary(user, data), reply_markup=booking_confirm_kb())
+    fields = await db.get_booking_fields()
+    if fields:
+        await state.update_data(
+            custom_field_queue=[f["field_key"] for f in fields],
+            custom_field_labels={f["field_key"]: f["label"] for f in fields},
+            custom_field_answers={},
+        )
+        await state.set_state(BookingStates.custom_field_input)
+        await _ask_next_custom_field(message.answer, message.from_user.id, state)
+    else:
+        await state.update_data(custom_field_answers={}, custom_field_labels={})
+        await _go_to_confirm(message.answer, message.from_user.id, state)
+
+
+@router.message(BookingStates.custom_field_input)
+async def get_custom_field_answer(message: Message, state: FSMContext):
+    data = await state.get_data()
+    queue = list(data.get("custom_field_queue") or [])
+    if not queue:
+        await _go_to_confirm(message.answer, message.from_user.id, state)
+        return
+    key = queue.pop(0)
+    answers = dict(data.get("custom_field_answers") or {})
+    answers[key] = message.text.strip()
+    await state.update_data(custom_field_queue=queue, custom_field_answers=answers)
+    await _ask_next_custom_field(message.answer, message.from_user.id, state)
 
 
 @router.callback_query(BookingStates.confirm, F.data == "booking_cancel")
@@ -202,6 +251,8 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
         "group_name": data["group_name"],
         "students_count": data["students_count"],
     })
+    for key, value in (data.get("custom_field_answers") or {}).items():
+        await db.set_booking_field_value(booking_id, key, value)
     await state.clear()
 
     is_adm = await db.is_admin(callback.from_user.id)
@@ -218,6 +269,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
         + (f" ({data['test_name']})" if data.get("test_name") else "")
         + f"\nGuruh: {data['group_name']}\n"
         f"O'quvchilar soni: {data['students_count']}"
+        + _custom_fields_block(data)
     )
 
     examiners = await db.get_examiners_by_branch(data["branch"])
@@ -426,6 +478,14 @@ async def repeat_start(callback: CallbackQuery, state: FSMContext):
         prefill["test_name"] = source.get("test_name")
     if "students_count" not in selected:
         prefill["students_count"] = source["students_count"]
+
+    fields = await db.get_booking_fields()
+    source_values = await db.get_booking_field_values(source["id"])
+    prefill["custom_field_answers"] = {
+        f["field_key"]: source_values[f["field_key"]]
+        for f in fields if f["field_key"] in source_values
+    }
+    prefill["custom_field_labels"] = {f["field_key"]: f["label"] for f in fields}
 
     queue = [f for f in REPEAT_FIELD_ORDER if f in selected]
     await state.update_data(**prefill, repeat_queue=queue)
