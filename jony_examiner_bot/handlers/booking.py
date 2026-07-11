@@ -14,6 +14,7 @@ from keyboards import (
     build_main_menu_kb,
     booking_branch_kb,
     repeat_fields_kb,
+    repeat_group_match_kb,
     REPEAT_FIELD_ORDER,
 )
 
@@ -426,12 +427,69 @@ async def start_repeat_booking(message: Message, state: FSMContext):
 @router.message(BookingStates.repeat_group_name)
 async def get_repeat_group_name(message: Message, state: FSMContext):
     group_name = message.text.strip()
+
+    # 1) Avval to'liq mos kelishini tekshiramiz (masalan "Step 3 (Vikings)")
     last = await db.get_last_booking_by_group(message.from_user.id, group_name)
-    if not last:
+    if last:
+        await state.update_data(
+            group_name=last["group_name"],
+            repeat_source=last,
+            repeat_selected=[],
+        )
+        await state.set_state(BookingStates.repeat_fields_select)
+        await message.answer(
+            _repeat_source_summary(last)
+            + "\n\nQaysi ma'lumotlarni qayta kiritmoqchisiz?\n"
+            "☑️ belgilangan maydonlar so'raladi, qolganlari avvalgidek qoladi.",
+            reply_markup=repeat_fields_kb(set()),
+        )
+        return
+
+    # 2) To'liq mos kelmasa — qisman nom bo'yicha qidiramiz (masalan shunchaki "Step 3")
+    matches = await db.find_teacher_group_names(message.from_user.id, group_name)
+    if not matches:
         await message.answer(
             f"\"{group_name}\" nomli guruh uchun avvalgi buyurtma topilmadi. "
             "Boshqa nom kiriting yoki bekor qiling:"
         )
+        return
+
+    if len(matches) == 1:
+        last = await db.get_last_booking_by_group(message.from_user.id, matches[0])
+        await state.update_data(
+            group_name=last["group_name"],
+            repeat_source=last,
+            repeat_selected=[],
+        )
+        await state.set_state(BookingStates.repeat_fields_select)
+        await message.answer(
+            _repeat_source_summary(last)
+            + "\n\nQaysi ma'lumotlarni qayta kiritmoqchisiz?\n"
+            "☑️ belgilangan maydonlar so'raladi, qolganlari avvalgidek qoladi.",
+            reply_markup=repeat_fields_kb(set()),
+        )
+        return
+
+    # 3) Bir nechta mos guruh topilsa — tanlash uchun tugmalar chiqaramiz
+    await state.update_data(repeat_group_matches=matches)
+    await message.answer(
+        "Bir nechta mos guruh topildi, kerakligini tanlang:",
+        reply_markup=repeat_group_match_kb(matches),
+    )
+
+
+@router.callback_query(BookingStates.repeat_group_name, F.data.startswith("repeatgroup:"))
+async def choose_repeat_group_match(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    matches = data.get("repeat_group_matches") or []
+    if idx >= len(matches):
+        await callback.answer("Xatolik yuz berdi, qaytadan urinib ko'ring.", show_alert=True)
+        return
+
+    last = await db.get_last_booking_by_group(callback.from_user.id, matches[idx])
+    if not last:
+        await callback.answer("Topilmadi.", show_alert=True)
         return
 
     await state.update_data(
@@ -440,12 +498,13 @@ async def get_repeat_group_name(message: Message, state: FSMContext):
         repeat_selected=[],
     )
     await state.set_state(BookingStates.repeat_fields_select)
-    await message.answer(
+    await callback.message.edit_text(
         _repeat_source_summary(last)
         + "\n\nQaysi ma'lumotlarni qayta kiritmoqchisiz?\n"
         "☑️ belgilangan maydonlar so'raladi, qolganlari avvalgidek qoladi.",
         reply_markup=repeat_fields_kb(set()),
     )
+    await callback.answer()
 
 
 @router.callback_query(BookingStates.repeat_fields_select, F.data.startswith("repeat_toggle:"))
