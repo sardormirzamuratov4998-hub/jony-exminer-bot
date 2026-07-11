@@ -196,6 +196,7 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
     if role == "TEACHER":
         builder.button(text="📅 Imtihon buyurtma qilish")
         builder.button(text="🔁 avval imtihon topshirgan guruh")
+        builder.button(text="🕒 Vaqtni ko'chirish")
         builder.button(text="📋 Mening buyurtmalarim")
         builder.button(text="➕ Filial qo'shish")
     elif role == "EXAMINER":
@@ -229,6 +230,17 @@ def repeat_group_match_kb(matches):
     builder = InlineKeyboardBuilder()
     for i, name in enumerate(matches):
         builder.button(text=name, callback_data=f"repeatgroup:{i}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def reschedule_pick_kb(bookings):
+    """Ustozning ko'chirish mumkin bo'lgan (pending/accepted) buyurtmalari ro'yxati."""
+    builder = InlineKeyboardBuilder()
+    for b in bookings:
+        label = f"{b['exam_date']} {b['exam_time']} — {b['group_name']}"
+        builder.button(text=label, callback_data=f"reschedule_pick:{b['id']}")
+    builder.button(text="❌ Bekor qilish", callback_data="reschedule_cancel")
     builder.adjust(1)
     return builder.as_markup()
 
