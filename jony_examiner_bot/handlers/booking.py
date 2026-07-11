@@ -15,6 +15,7 @@ from keyboards import (
     booking_branch_kb,
     repeat_fields_kb,
     repeat_group_match_kb,
+    reschedule_pick_kb,
     REPEAT_FIELD_ORDER,
 )
 
@@ -109,6 +110,140 @@ async def my_bookings(message: Message):
             f"{examiner_line}"
         )
     await message.answer("\n".join(lines))
+
+
+# =========================================================
+# BUYURTMA VAQTINI KO'CHIRISH
+# =========================================================
+
+@router.message(F.text == "🕒 Vaqtni ko'chirish")
+async def start_reschedule(message: Message, state: FSMContext):
+    user = await _is_teacher(message.from_user.id)
+    if not user:
+        return
+
+    bookings = await db.get_teacher_bookings(message.from_user.id, limit=50)
+    active = [b for b in bookings if b["status"] in ("pending", "accepted")]
+    if not active:
+        await message.answer("Sizda hozircha vaqtini ko'chirish mumkin bo'lgan faol buyurtmalar yo'q.")
+        return
+
+    await state.set_state(BookingStates.reschedule_pick)
+    await message.answer(
+        "Qaysi buyurtmaning sana/vaqtini ko'chirmoqchisiz?",
+        reply_markup=reschedule_pick_kb(active),
+    )
+
+
+@router.callback_query(BookingStates.reschedule_pick, F.data == "reschedule_cancel")
+async def reschedule_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    is_adm = await db.is_admin(callback.from_user.id)
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
+    await callback.answer()
+
+
+@router.callback_query(BookingStates.reschedule_pick, F.data.startswith("reschedule_pick:"))
+async def reschedule_pick(callback: CallbackQuery, state: FSMContext):
+    booking_id = int(callback.data.split(":", 1)[1])
+    booking = await db.get_booking(booking_id)
+    if not booking or booking["teacher_telegram_id"] != callback.from_user.id:
+        await callback.answer("Buyurtma topilmadi.", show_alert=True)
+        return
+    if booking["status"] not in ("pending", "accepted"):
+        await callback.answer("Bu buyurtma endi faol emas.", show_alert=True)
+        return
+
+    await state.update_data(reschedule_booking_id=booking_id)
+    await state.set_state(BookingStates.reschedule_date)
+    await callback.message.edit_text(
+        f"Tanlandi: {booking['exam_date']} {booking['exam_time']} — {booking['group_name']}\n\n"
+        "Yangi sanani kiriting (masalan: 27.06.2026):"
+    )
+    await callback.answer()
+
+
+@router.message(BookingStates.reschedule_date)
+async def reschedule_get_date(message: Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text.strip(), "%d.%m.%Y")
+    except ValueError:
+        await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
+        return
+    await state.update_data(new_exam_date=message.text.strip())
+    await state.set_state(BookingStates.reschedule_time)
+    await message.answer("Yangi vaqtni kiriting (masalan: 08:00):")
+
+
+@router.message(BookingStates.reschedule_time)
+async def reschedule_get_time(message: Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text.strip(), "%H:%M")
+    except ValueError:
+        await message.answer("Noto'g'ri format. Masalan: 08:00 shaklida kiriting:")
+        return
+    new_time = message.text.strip()
+
+    data = await state.get_data()
+    booking_id = data.get("reschedule_booking_id")
+    new_date = data.get("new_exam_date")
+
+    booking = await db.get_booking(booking_id)
+    if not booking or booking["status"] not in ("pending", "accepted"):
+        await state.clear()
+        await message.answer("Bu buyurtma endi mavjud emas yoki faol emas.")
+        return
+
+    old_date, old_time = booking["exam_date"], booking["exam_time"]
+
+    if booking["status"] == "accepted" and booking.get("examiner_telegram_id"):
+        same_datetime = (new_date == old_date and new_time == old_time)
+        if not same_datetime:
+            conflict = await db.examiner_has_conflict(
+                booking["examiner_telegram_id"], new_date, new_time
+            )
+            if conflict:
+                await message.answer(
+                    "Kechirasiz, biriktirilgan examinerda shu yangi sana va vaqtga "
+                    "allaqachon boshqa imtihon bor. Boshqa sana/vaqt kiriting, "
+                    "yoki /change_role yozib bekor qiling."
+                )
+                return
+
+    await db.reschedule_booking(booking_id, new_date, new_time)
+    await state.clear()
+
+    is_adm = await db.is_admin(message.from_user.id)
+    await message.answer(
+        f"✅ Buyurtma vaqti ko'chirildi!\n\n"
+        f"Guruh: {booking['group_name']}\n"
+        f"Eski: {old_date} {old_time}\nYangi: {new_date} {new_time}",
+        reply_markup=build_main_menu_kb("TEACHER", is_adm),
+    )
+
+    change_text = (
+        f"🕒 <b>Buyurtma vaqti o'zgartirildi</b>\n\n"
+        f"Ustoz: {booking['teacher_name']}\nFilial: {booking['branch']}\n"
+        f"Guruh: {booking['group_name']}\n"
+        f"Eski sana/vaqt: {old_date} {old_time}\n"
+        f"Yangi sana/vaqt: {new_date} {new_time}"
+    )
+
+    # Buyurtma haqida avval xabar olgan barcha tomonlarga (filial examinerlari,
+    # admin guruh, va END OF COURSE/MIDTERM bo'lsa — o'quv bo'lim rahbarlari ham) yuboriladi
+    notifications = await db.get_notifications(booking_id)
+    for note in notifications:
+        try:
+            await message.bot.send_message(note["chat_id"], change_text)
+        except Exception:
+            pass
+
+    if booking["status"] == "pending":
+        await message.answer(
+            "Eslatma: buyurtma hali hech kim tomonidan qabul qilinmagan, "
+            "yangi vaqt bilan qabul qilinishini kuting."
+        )
 
 
 @router.callback_query(BookingStates.choose_branch, F.data.startswith("bookbranch:"))
