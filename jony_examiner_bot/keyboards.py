@@ -39,8 +39,26 @@ def entry_mode_kb(saved_count: int = 0):
             text=f"📂 Saqlangan ro'yxatdan foydalanish ({saved_count} ta)",
             callback_data="entry_mode:saved",
         )
+        builder.button(
+            text="🗑 Guruhdan o'quvchi o'chirish",
+            callback_data="entry_mode:manage",
+        )
     builder.button(text="📋 Ro'yxatni bir xabarda yuborish (tezroq)", callback_data="entry_mode:bulk")
     builder.button(text="📝 Birma-bir kiritish", callback_data="entry_mode:single")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def manage_group_kb(students, selected):
+    """selected = GURUHDAN O'CHIRILADIGAN (belgilangan) o'quvchilar to'plami."""
+    builder = InlineKeyboardBuilder()
+    for i, s in enumerate(students):
+        mark = "🗑" if i in selected else "⬜️"
+        builder.button(
+            text=f"{mark} {s['surname']} {s['name']}", callback_data=f"manage_toggle:{i}"
+        )
+    builder.button(text="✅ Belgilanganlarni o'chirish", callback_data="manage_confirm")
+    builder.button(text="◀️ Orqaga", callback_data="manage_back")
     builder.adjust(1)
     return builder.as_markup()
 
