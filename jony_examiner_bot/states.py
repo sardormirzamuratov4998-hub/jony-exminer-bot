@@ -59,5 +59,6 @@ class BookingStates(StatesGroup):
 
 
 class AdminStates(StatesGroup):
-    pass
+    search_query = State()
+    reminder_input = State()
 
