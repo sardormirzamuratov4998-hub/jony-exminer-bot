@@ -50,11 +50,13 @@ async def check_reminders(bot):
 
 
 async def check_escalations(bot):
-    stale = await db.get_pending_bookings_older_than(24)
+    """Har kuni soat 18:00da (Toshkent vaqti) hali qabul qilinmagan
+    barcha buyurtmalar haqida shu filial examinerlarini ogohlantiradi."""
+    stale = await db.get_all_pending_bookings()
     for b in stale:
         examiners = await db.get_examiners_by_branch(b["branch"])
         text = (
-            f"⚠️ <b>DIQQAT: 24 soatdan beri qabul qilinmagan buyurtma</b>\n\n"
+            f"⚠️ <b>DIQQAT: hali qabul qilinmagan buyurtma bor</b>\n\n"
             f"Ustoz: {b['teacher_name']}\nFilial: {b['branch']}\n"
             f"Sana: {b['exam_date']}\nVaqt: {b['exam_time']}\n"
             f"Guruh: {b['group_name']}"
@@ -103,10 +105,14 @@ async def send_daily_report(bot):
 def start_scheduler(bot):
     scheduler = AsyncIOScheduler()
     scheduler.add_job(check_reminders, "interval", minutes=1, args=[bot])
-    scheduler.add_job(check_escalations, "interval", minutes=30, args=[bot])
     scheduler.add_job(check_expired_bookings, "interval", minutes=10, args=[bot])
     scheduler.add_job(
         send_daily_report,
+        CronTrigger(hour=18, minute=0, timezone=db.TASHKENT_TZ),
+        args=[bot],
+    )
+    scheduler.add_job(
+        check_escalations,
         CronTrigger(hour=18, minute=0, timezone=db.TASHKENT_TZ),
         args=[bot],
     )
