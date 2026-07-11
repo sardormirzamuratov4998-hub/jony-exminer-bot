@@ -96,7 +96,7 @@ async def _send_admins(send):
 
 
 async def _send_daily_report(send, bot=None):
-    today = datetime.now().strftime("%d.%m.%Y")
+    today = db.now_tashkent().strftime("%d.%m.%Y")
     report = await db.get_daily_report(today)
     lines = [f"📊 <b>Kunlik hisobot — {today}</b>\n"]
 
