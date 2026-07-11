@@ -8,6 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import database as db
+from states import AdminStates
 from keyboards import examiner_approve_kb, admin_panel_kb
 
 router = Router()
@@ -113,6 +114,35 @@ async def _send_daily_report(send, bot=None):
             lines.append(f"• {name}: {count} ta")
     else:
         lines.append("• Bugun hech kim imtihon qabul qilmagan")
+
+    await send("\n".join(lines))
+
+
+async def _send_stats(send, days: int = 30):
+    stats = await db.get_stats(days)
+    lines = [f"📈 <b>Statistika (oxirgi {days} kun)</b>\n"]
+
+    lines.append(f"📥 Jami buyurtmalar: {stats['total_bookings']} ta")
+    lines.append(f"✅ Qabul qilingan: {stats['accepted_bookings']} ta")
+    if stats["total_bookings"]:
+        rate = stats["accepted_bookings"] / stats["total_bookings"] * 100
+        lines.append(f"📊 Qabul qilish darajasi: {rate:.0f}%")
+
+    if stats["by_branch"]:
+        lines.append("\n📍 <b>Filial bo'yicha buyurtmalar:</b>")
+        for branch, count in stats["by_branch"].items():
+            lines.append(f"• {branch}: {count} ta")
+
+    if stats["by_examiner"]:
+        lines.append("\n🧑‍💼 <b>Examinerlar bo'yicha o'tkazilgan testlar:</b>")
+        for name, info in stats["by_examiner"].items():
+            lines.append(f"• {name}: {info['count']} ta test, o'rtacha {info['avg_percent']:.0f}%")
+
+    if stats["overall_avg_percent"] is not None:
+        lines.append(f"\n🎯 Umumiy o'rtacha ball: {stats['overall_avg_percent']:.0f}%")
+        lines.append(f"✅ PASS: {stats['total_pass']} ta   ❌ FAIL: {stats['total_fail']} ta")
+    else:
+        lines.append("\nHali natija statistikasi yo'q (test yakunlanmagan).")
 
     await send("\n".join(lines))
 
@@ -276,6 +306,90 @@ async def daily_report_cb(callback: CallbackQuery):
         return
     await _send_daily_report(callback.message.answer)
     await callback.answer()
+
+
+@router.message(Command("stats"))
+async def stats_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_stats(message.answer)
+
+
+@router.callback_query(F.data == "admin_stats")
+async def stats_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_stats(callback.message.answer)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_search")
+async def search_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.search_query)
+    await callback.message.answer(
+        "🔍 Qidiruv so'zini kiriting (ustoz ismi, guruh nomi, filial yoki test turi):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.search_query)
+async def search_process(message: Message, state: FSMContext):
+    await state.clear()
+    query = message.text.strip()
+    results = await db.search_bookings(query)
+    if not results:
+        await message.answer(f"\"{query}\" bo'yicha hech narsa topilmadi.")
+        return
+
+    status_labels = {
+        "pending": "🟡 kutilmoqda",
+        "accepted": "🟢 qabul qilingan",
+        "cancelled": "🔴 bekor qilingan",
+        "expired": "⚪️ muddati o'tgan",
+    }
+    lines = [f"🔍 <b>\"{query}\" bo'yicha natijalar ({len(results)} ta):</b>\n"]
+    for b in results:
+        lines.append(
+            f"{status_labels.get(b['status'], b['status'])} — {b['exam_date']} {b['exam_time']}\n"
+            f"   Filial: {b['branch']}, Ustoz: {b['teacher_name']}\n"
+            f"   Guruh: {b['group_name']}, Turi: {b['test_type']}"
+        )
+    text = "\n\n".join(lines)
+    if len(text) > 3500:
+        text = text[:3500] + "\n\n... (natijalar ko'p, qidiruvni aniqroq kiriting)"
+    await message.answer(text)
+
+
+@router.callback_query(F.data == "admin_reminder_setting")
+async def reminder_setting_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    current = await db.get_setting("reminder_hours_before") or "1"
+    await state.set_state(AdminStates.reminder_input)
+    await callback.message.answer(
+        f"⏰ Hozirgi sozlama: imtihondan <b>{current}</b> soat oldin eslatma yuboriladi.\n\n"
+        "Necha soat oldin eslatma yuborilsin? (masalan: 1 yoki 0.5 yoki 2):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.reminder_input)
+async def reminder_setting_process(message: Message, state: FSMContext):
+    await state.clear()
+    try:
+        hours = float(message.text.strip().replace(",", "."))
+        if hours <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Noto'g'ri qiymat. Faqat musbat son kiriting (masalan: 1 yoki 0.5):")
+        return
+    await db.set_setting("reminder_hours_before", str(hours))
+    await message.answer(f"✅ Endi imtihondan {hours} soat oldin eslatma yuboriladi.")
 
 
 @router.callback_query(F.data.startswith("remove_staff:"))
