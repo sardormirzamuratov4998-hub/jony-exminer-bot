@@ -27,9 +27,33 @@ def sections_confirm_kb():
 def after_student_kb():
     builder = ReplyKeyboardBuilder()
     builder.button(text="➕ O'quvchi qo'shish")
+    builder.button(text="✏️ Tuzatish / O'chirish")
     builder.button(text="✅ Tayyor")
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
+
+
+def edit_list_kb(students):
+    """Kiritilgan o'quvchilar ro'yxati — tanlab tuzatish/o'chirish uchun."""
+    builder = InlineKeyboardBuilder()
+    for i, s in enumerate(students):
+        percent = s.get("percent", 0)
+        builder.button(
+            text=f"{s['surname']} {s['name']} — {percent:.1f}%",
+            callback_data=f"edit_pick:{i}",
+        )
+    builder.button(text="◀️ Orqaga", callback_data="edit_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def edit_action_kb(index: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Balini tuzatish", callback_data=f"edit_score:{index}")
+    builder.button(text="🗑 O'chirish", callback_data=f"edit_delete:{index}")
+    builder.button(text="◀️ Orqaga", callback_data="edit_list_back")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def entry_mode_kb(saved_count: int = 0):
