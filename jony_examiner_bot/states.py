@@ -75,6 +75,11 @@ class BookingStates(StatesGroup):
     repeat_unit_name = State()
     repeat_students_count = State()
 
+    # BUYURTMA VAQTINI KO'CHIRISH
+    reschedule_pick = State()
+    reschedule_date = State()
+    reschedule_time = State()
+
 
 class AdminStates(StatesGroup):
     search_query = State()
