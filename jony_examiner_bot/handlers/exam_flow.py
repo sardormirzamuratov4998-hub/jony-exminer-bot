@@ -15,6 +15,8 @@ from keyboards import (
     entry_mode_kb,
     retake_checkbox_kb,
     manage_group_kb,
+    edit_list_kb,
+    edit_action_kb,
 )
 from excel_export import build_excel
 
@@ -629,6 +631,192 @@ async def add_more_student(message: Message, state: FSMContext):
     else:
         await state.set_state(ExamStates.student_surname)
         await message.answer("Keyingi o'quvchining FAMILIYASI:")
+
+
+@router.message(ExamStates.after_student, F.text == "✏️ Tuzatish / O'chirish")
+async def edit_menu_open(message: Message, state: FSMContext):
+    data = await state.get_data()
+    students = data.get("students", [])
+    if not students:
+        await message.answer("Hali hech qanday o'quvchi kiritilmagan.")
+        return
+    await state.set_state(ExamStates.edit_list)
+    await message.answer(
+        "Qaysi o'quvchini tuzatmoqchisiz yoki o'chirmoqchisiz?",
+        reply_markup=edit_list_kb(students),
+    )
+
+
+@router.callback_query(ExamStates.edit_list, F.data == "edit_cancel")
+async def edit_menu_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(ExamStates.after_student)
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
+@router.callback_query(ExamStates.edit_list, F.data.startswith("edit_pick:"))
+async def edit_pick_student(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    students = data.get("students", [])
+    if idx >= len(students):
+        await callback.answer("O'quvchi topilmadi.", show_alert=True)
+        return
+    s = students[idx]
+    await callback.message.edit_text(
+        f"👤 {s['surname']} {s['name']} — {s['percent']:.1f}% ({s['status']})\n\n"
+        "Nima qilmoqchisiz?",
+        reply_markup=edit_action_kb(idx),
+    )
+    await callback.answer()
+
+
+@router.callback_query(ExamStates.edit_list, F.data == "edit_list_back")
+async def edit_list_back(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    students = data.get("students", [])
+    if not students:
+        await state.set_state(ExamStates.after_student)
+        await callback.message.edit_text("O'quvchilar ro'yxati bo'sh qoldi.")
+        await callback.answer()
+        return
+    await callback.message.edit_text(
+        "Qaysi o'quvchini tuzatmoqchisiz yoki o'chirmoqchisiz?",
+        reply_markup=edit_list_kb(students),
+    )
+    await callback.answer()
+
+
+@router.callback_query(ExamStates.edit_list, F.data.startswith("edit_delete:"))
+async def edit_delete_student(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    students = data.get("students", [])
+    if idx >= len(students):
+        await callback.answer("O'quvchi topilmadi.", show_alert=True)
+        return
+    removed = students.pop(idx)
+    await state.update_data(students=students)
+
+    if not students:
+        await state.set_state(ExamStates.after_student)
+        await callback.message.edit_text(
+            f"🗑 O'chirildi: {removed['surname']} {removed['name']}\n\n"
+            "Ro'yxatda boshqa o'quvchi qolmadi."
+        )
+        await callback.answer()
+        return
+
+    await callback.message.edit_text(
+        f"🗑 O'chirildi: {removed['surname']} {removed['name']}\n\n"
+        "Qaysi o'quvchini tuzatmoqchisiz yoki o'chirmoqchisiz?",
+        reply_markup=edit_list_kb(students),
+    )
+    await callback.answer("O'chirildi ✅")
+
+
+@router.callback_query(ExamStates.edit_list, F.data.startswith("edit_score:"))
+async def edit_score_start(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split(":")[1])
+    data = await state.get_data()
+    students = data.get("students", [])
+    if idx >= len(students):
+        await callback.answer("O'quvchi topilmadi.", show_alert=True)
+        return
+    s = students[idx]
+    await state.update_data(editing_index=idx)
+
+    if data["test_type"] == "unit":
+        await state.set_state(ExamStates.edit_score_unit)
+        await callback.message.edit_text(
+            f"✏️ {s['surname']} {s['name']} — yangi ball nechi? (max {data['max_score']}):"
+        )
+    else:
+        await state.set_state(ExamStates.edit_score_midterm)
+        sec = data["sections"]
+        await callback.message.edit_text(
+            f"✏️ {s['surname']} {s['name']} — yangi ballarni <b>bitta xabarda</b>, "
+            f"LISTENING READING WRITING SPEAKING tartibida kiriting.\n"
+            f"(max: {sec['listening']} {sec['reading']} {sec['writing']} {sec['speaking']})\n\n"
+            f"Masalan: 19 24 33 13"
+        )
+    await callback.answer()
+
+
+@router.message(ExamStates.edit_score_unit)
+async def edit_score_unit_save(message: Message, state: FSMContext):
+    data = await state.get_data()
+    val = await safe_float(message.text)
+    if val is None or val < 0 or val > data["max_score"]:
+        await message.answer(f"0 dan {data['max_score']}gacha son kiriting:")
+        return
+
+    idx = data["editing_index"]
+    students = data.get("students", [])
+    if idx >= len(students):
+        await state.set_state(ExamStates.after_student)
+        await message.answer("O'quvchi topilmadi.", reply_markup=after_student_kb())
+        return
+
+    percent = val / data["max_score"] * 100
+    status = unit_status(percent)
+    students[idx]["total"] = val
+    students[idx]["percent"] = percent
+    students[idx]["status"] = status
+    await state.update_data(students=students)
+    await state.set_state(ExamStates.after_student)
+    await message.answer(
+        f"✅ Yangilandi: {students[idx]['surname']} {students[idx]['name']} — "
+        f"{percent:.1f}% — {status}\n\nDavom etamizmi?",
+        reply_markup=after_student_kb(),
+    )
+
+
+@router.message(ExamStates.edit_score_midterm)
+async def edit_score_midterm_save(message: Message, state: FSMContext):
+    data = await state.get_data()
+    sec = data["sections"]
+    tokens = message.text.replace(",", ".").split()
+    if len(tokens) != 4:
+        await message.answer(
+            "4 ta son kiriting (LISTENING READING WRITING SPEAKING), masalan: 19 24 33 13"
+        )
+        return
+    try:
+        l, r, w, sp = [float(t) for t in tokens]
+    except ValueError:
+        await message.answer("Faqat sonlar kiriting, masalan: 19 24 33 13")
+        return
+    if not (0 <= l <= sec["listening"] and 0 <= r <= sec["reading"]
+            and 0 <= w <= sec["writing"] and 0 <= sp <= sec["speaking"]):
+        await message.answer(
+            f"Ballar max qiymatdan oshmasin (max: {sec['listening']} {sec['reading']} "
+            f"{sec['writing']} {sec['speaking']}):"
+        )
+        return
+
+    idx = data["editing_index"]
+    students = data.get("students", [])
+    if idx >= len(students):
+        await state.set_state(ExamStates.after_student)
+        await message.answer("O'quvchi topilmadi.", reply_markup=after_student_kb())
+        return
+
+    total = l + r + w + sp
+    max_total = sum(sec.values())
+    percent = total / max_total * 100
+    status = midterm_status(percent)
+    students[idx].update({
+        "listening": l, "reading": r, "writing": w, "speaking": sp,
+        "total": total, "percent": percent, "status": status,
+    })
+    await state.update_data(students=students)
+    await state.set_state(ExamStates.after_student)
+    await message.answer(
+        f"✅ Yangilandi: {students[idx]['surname']} {students[idx]['name']} — "
+        f"{percent:.1f}% — {status}\n\nDavom etamizmi?",
+        reply_markup=after_student_kb(),
+    )
 
 
 @router.message(ExamStates.after_student, F.text == "✅ Tayyor")
