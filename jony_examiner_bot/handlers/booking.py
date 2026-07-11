@@ -49,6 +49,41 @@ async def start_booking(message: Message, state: FSMContext):
         )
 
 
+_STATUS_LABELS = {
+    "pending": ("🟡", "Kutilmoqda"),
+    "accepted": ("🟢", "Qabul qilingan"),
+    "cancelled": ("🔴", "Bekor qilingan"),
+    "expired": ("⚪️", "Muddati o'tgan"),
+}
+
+
+@router.message(F.text == "📋 Mening buyurtmalarim")
+async def my_bookings(message: Message):
+    user = await _is_teacher(message.from_user.id)
+    if not user:
+        return
+
+    bookings = await db.get_teacher_bookings(message.from_user.id)
+    if not bookings:
+        await message.answer("Sizda hozircha buyurtmalar yo'q.")
+        return
+
+    lines = ["📋 <b>Mening buyurtmalarim:</b>"]
+    for b in bookings:
+        emoji, label = _STATUS_LABELS.get(b["status"], ("⚪️", b["status"]))
+        test_info = b["test_type"]
+        if b.get("test_name"):
+            test_info += f" ({b['test_name']})"
+        examiner_line = f"\nExaminer: {b['examiner_name']}" if b.get("examiner_name") else ""
+        lines.append(
+            f"\n{emoji} <b>{b['exam_date']} {b['exam_time']}</b> — {label}\n"
+            f"Filial: {b['branch']}\nGuruh: {b['group_name']}\n"
+            f"Turi: {test_info}\nO'quvchilar soni: {b['students_count']}"
+            f"{examiner_line}"
+        )
+    await message.answer("\n".join(lines))
+
+
 @router.callback_query(BookingStates.choose_branch, F.data.startswith("bookbranch:"))
 async def choose_booking_branch(callback: CallbackQuery, state: FSMContext):
     branch = callback.data.split(":", 1)[1]
