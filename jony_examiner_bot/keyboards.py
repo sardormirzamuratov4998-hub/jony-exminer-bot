@@ -254,6 +254,8 @@ def admin_panel_kb():
     builder.button(text="👤 Xodimlar (o'chirish)", callback_data="admin_staff")
     builder.button(text="🏢 Filiallarni boshqarish", callback_data="admin_branches")
     builder.button(text="🧪 Test turlarini boshqarish", callback_data="admin_test_types")
+    builder.button(text="🎯 Baholash chegaralari", callback_data="admin_grading")
+    builder.button(text="📝 Buyurtma maydonlari", callback_data="admin_booking_fields")
     builder.button(text="🛡 Adminlar ro'yxati", callback_data="admin_admins")
     builder.button(text="➕ Admin qo'shish", callback_data="admin_add")
     builder.button(text="📊 Kunlik hisobot (hozir)", callback_data="admin_daily_report")
@@ -294,5 +296,43 @@ def test_type_delete_confirm_kb(name: str):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Ha, o'chirish", callback_data=f"testtype_del_yes:{name}")
     builder.button(text="❌ Bekor qilish", callback_data="testtype_del_no")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+GRADING_LABELS = {
+    "unit_excellent": "🏆 EXCELLENT chegarasi (UNIT)",
+    "unit_good": "🥈 GOOD chegarasi (UNIT)",
+    "unit_average": "🥉 AVERAGE chegarasi (UNIT)",
+    "unit_bad": "⚠️ BAD chegarasi (UNIT, bundan past — FAIL)",
+    "midterm_pass": "✅ PASS chegarasi (MIDTERM)",
+}
+GRADING_ORDER = ["unit_excellent", "unit_good", "unit_average", "unit_bad", "midterm_pass"]
+
+
+def grading_thresholds_kb(thresholds: dict):
+    builder = InlineKeyboardBuilder()
+    for key in GRADING_ORDER:
+        builder.button(
+            text=f"{GRADING_LABELS[key]}: {thresholds[key]}%",
+            callback_data=f"grading_edit:{key}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def booking_field_manage_kb(fields):
+    builder = InlineKeyboardBuilder()
+    for f in fields:
+        builder.button(text=f"🗑 {f['label']}", callback_data=f"bookfield_del:{f['field_key']}")
+    builder.button(text="➕ Yangi maydon qo'shish", callback_data="bookfield_add")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def booking_field_delete_confirm_kb(field_key: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, o'chirish", callback_data=f"bookfield_del_yes:{field_key}")
+    builder.button(text="❌ Bekor qilish", callback_data="bookfield_del_no")
     builder.adjust(2)
     return builder.as_markup()
