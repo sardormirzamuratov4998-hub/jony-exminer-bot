@@ -32,8 +32,13 @@ def after_student_kb():
     return builder.as_markup(resize_keyboard=True)
 
 
-def entry_mode_kb():
+def entry_mode_kb(saved_count: int = 0):
     builder = InlineKeyboardBuilder()
+    if saved_count:
+        builder.button(
+            text=f"📂 Saqlangan ro'yxatdan foydalanish ({saved_count} ta)",
+            callback_data="entry_mode:saved",
+        )
     builder.button(text="📋 Ro'yxatni bir xabarda yuborish (tezroq)", callback_data="entry_mode:bulk")
     builder.button(text="📝 Birma-bir kiritish", callback_data="entry_mode:single")
     builder.adjust(1)
@@ -161,6 +166,7 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
         builder.button(text="➕ Filial qo'shish")
     elif role == "EXAMINER":
         builder.button(text="🆕 Test kiritish")
+        builder.button(text="📅 Mening imtihonlarim")
     if is_admin:
         builder.button(text="🛠 Admin panel")
     builder.adjust(1)
@@ -186,10 +192,13 @@ def admin_panel_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="📋 Kutilayotgan examinerlar", callback_data="admin_pending")
     builder.button(text="📅 Faol buyurtmalar", callback_data="admin_bookings")
+    builder.button(text="🔍 Qidiruv", callback_data="admin_search")
+    builder.button(text="📈 Statistika (30 kun)", callback_data="admin_stats")
     builder.button(text="👤 Xodimlar (o'chirish)", callback_data="admin_staff")
     builder.button(text="🛡 Adminlar ro'yxati", callback_data="admin_admins")
     builder.button(text="➕ Admin qo'shish", callback_data="admin_add")
     builder.button(text="📊 Kunlik hisobot (hozir)", callback_data="admin_daily_report")
+    builder.button(text="⏰ Eslatma vaqti", callback_data="admin_reminder_setting")
     builder.button(text="ℹ️ Admin guruh sozlash", callback_data="admin_group_info")
     builder.adjust(1)
     return builder.as_markup()
