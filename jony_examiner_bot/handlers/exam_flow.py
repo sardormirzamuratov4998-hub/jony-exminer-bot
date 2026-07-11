@@ -49,6 +49,38 @@ async def safe_float(text: str):
         return None
 
 
+async def _prepare_entry_mode(state: FSMContext, telegram_id: int) -> int:
+    """Guruh nomi bo'yicha saqlangan o'quvchilar ro'yxatini tekshiradi va
+    state'ga joylab, topilgan sonini qaytaradi (entry_mode_kb uchun)."""
+    data = await state.get_data()
+    user = await db.get_user(telegram_id)
+    branch = user["branch"] if user else None
+    group_name = data.get("level_name", "")
+    saved = await db.get_saved_group_students(branch, group_name) if branch else []
+    await state.update_data(saved_students_available=saved, saved_branch=branch)
+    return len(saved)
+
+
+async def _advance_saved_queue(target, state: FSMContext):
+    """Saqlangan ro'yxatdagi keyingi o'quvchini navbatdan olib, to'g'ridan-to'g'ri
+    ball kiritish bosqichiga o'tkazadi (ism-familiya qayta so'ralmaydi)."""
+    data = await state.get_data()
+    queue = list(data.get("saved_queue", []))
+    nxt = queue.pop(0)
+    await state.update_data(saved_queue=queue, cur_surname=nxt["surname"], cur_name=nxt["name"])
+    if data["test_type"] == "unit":
+        await state.set_state(ExamStates.student_score_unit)
+        await target.answer(
+            f"👤 {nxt['surname']} {nxt['name']} — ball nechi? (max {data['max_score']}):"
+        )
+    else:
+        await state.set_state(ExamStates.student_score_listening)
+        sec = data["sections"]
+        await target.answer(
+            f"👤 {nxt['surname']} {nxt['name']} — LISTENING ball (max {sec['listening']}):"
+        )
+
+
 # ---------- BOSHLASH ----------
 
 @router.message(F.text == "🆕 Test kiritish")
@@ -70,6 +102,31 @@ async def cancel_flow(message: Message, state: FSMContext):
     await state.clear()
     is_adm = await db.is_admin(message.from_user.id)
     await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb("EXAMINER", is_adm))
+
+
+# ---------- MENING IMTIHONLARIM ----------
+
+@router.message(F.text == "📅 Mening imtihonlarim")
+async def my_schedule(message: Message):
+    user = await db.get_user(message.from_user.id)
+    if not user or user["role"] != "EXAMINER":
+        return
+    bookings = await db.get_examiner_upcoming_bookings(message.from_user.id)
+    if not bookings:
+        await message.answer("Sizda hozircha qabul qilingan (kelayotgan) imtihonlar yo'q.")
+        return
+
+    lines = ["📅 <b>Mening imtihonlarim:</b>"]
+    for b in bookings:
+        test_info = b["test_type"]
+        if b.get("test_name"):
+            test_info += f" ({b['test_name']})"
+        lines.append(
+            f"\n🟢 <b>{b['exam_date']} {b['exam_time']}</b> — {b['branch']}\n"
+            f"Ustoz: {b['teacher_name']}\nGuruh: {b['group_name']}\n"
+            f"Turi: {test_info}\nO'quvchilar soni: {b['students_count']}"
+        )
+    await message.answer("\n".join(lines))
 
 
 # ---------- HEADER MA'LUMOTLARI ----------
@@ -150,9 +207,10 @@ async def get_unit_max_score(message: Message, state: FSMContext):
         await message.answer("Iltimos, faqat son kiriting (masalan: 30):")
         return
     await state.update_data(max_score=val)
+    saved_count = await _prepare_entry_mode(state, message.from_user.id)
     await state.set_state(ExamStates.entry_mode_choice)
     await message.answer(
-        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb()
+        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb(saved_count)
     )
 
 
@@ -180,10 +238,11 @@ async def get_midterm_level_name(message: Message, state: FSMContext):
 @router.callback_query(ExamStates.sections_confirm, F.data == "sections:default")
 async def sections_default(callback: CallbackQuery, state: FSMContext):
     await state.update_data(sections=dict(DEFAULT_SECTIONS))
+    saved_count = await _prepare_entry_mode(state, callback.from_user.id)
     await state.set_state(ExamStates.entry_mode_choice)
     await callback.message.edit_text("Standart ballar qabul qilindi ✅")
     await callback.message.answer(
-        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb()
+        "O'quvchilarni qanday kiritmoqchisiz?", reply_markup=entry_mode_kb(saved_count)
     )
     await callback.answer()
 
@@ -242,10 +301,11 @@ async def sec_speaking(message: Message, state: FSMContext):
         "speaking": val,
     }
     await state.update_data(sections=sections)
+    saved_count = await _prepare_entry_mode(state, message.from_user.id)
     await state.set_state(ExamStates.entry_mode_choice)
     await message.answer(
         "Ballar saqlandi ✅\n\nO'quvchilarni qanday kiritmoqchisiz?",
-        reply_markup=entry_mode_kb(),
+        reply_markup=entry_mode_kb(saved_count),
     )
 
 
@@ -284,6 +344,19 @@ async def entry_mode_bulk(callback: CallbackQuery, state: FSMContext):
             "qo'yishingiz ham mumkin)"
         )
     await callback.message.edit_text(example)
+    await callback.answer()
+
+
+@router.callback_query(ExamStates.entry_mode_choice, F.data == "entry_mode:saved")
+async def entry_mode_saved(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    saved = data.get("saved_students_available") or []
+    if not saved:
+        await callback.answer("Saqlangan ro'yxat topilmadi.", show_alert=True)
+        return
+    await state.update_data(saved_queue=list(saved), students=[])
+    await callback.message.edit_text(f"📂 Saqlangan ro'yxatdan {len(saved)} ta o'quvchi yuklandi.")
+    await _advance_saved_queue(callback.message, state)
     await callback.answer()
 
 
@@ -476,8 +549,12 @@ async def get_score_speaking(message: Message, state: FSMContext):
 
 @router.message(ExamStates.after_student, F.text == "➕ O'quvchi qo'shish")
 async def add_more_student(message: Message, state: FSMContext):
-    await state.set_state(ExamStates.student_surname)
-    await message.answer("Keyingi o'quvchining FAMILIYASI:")
+    data = await state.get_data()
+    if data.get("saved_queue"):
+        await _advance_saved_queue(message, state)
+    else:
+        await state.set_state(ExamStates.student_surname)
+        await message.answer("Keyingi o'quvchining FAMILIYASI:")
 
 
 @router.message(ExamStates.after_student, F.text == "✅ Tayyor")
@@ -581,6 +658,41 @@ async def idx_confirm(callback: CallbackQuery, state: FSMContext):
         export_data["max_score"] = data["max_score"]
     else:
         export_data["sections"] = data["sections"]
+
+    # 5) Guruh uchun o'quvchilar ro'yxatini keyingi safar uchun saqlash/yangilash
+    branch = data.get("saved_branch")
+    if not branch:
+        user = await db.get_user(callback.from_user.id)
+        branch = user["branch"] if user else None
+    if branch and data.get("level_name"):
+        seen = set()
+        unique_students = []
+        for s in students:
+            key = (s["surname"].strip().lower(), s["name"].strip().lower())
+            if key not in seen:
+                seen.add(key)
+                unique_students.append({"surname": s["surname"], "name": s["name"]})
+        await db.save_group_students(branch, data["level_name"], unique_students)
+
+    # 7) Statistika uchun natijalarni saqlash
+    if students:
+        percents = [s["percent"] for s in students]
+        avg_percent = sum(percents) / len(percents)
+        fail_count = sum(1 for s in students if s["status"] == "FAIL")
+        pass_count = len(students) - fail_count
+        examiner_user = await db.get_user(callback.from_user.id)
+        await db.save_exam_result({
+            "examiner_telegram_id": callback.from_user.id,
+            "examiner_name": examiner_user["full_name"] if examiner_user else data.get("examiner"),
+            "branch": branch,
+            "test_type": data["test_type"],
+            "test_name": data["test_name"],
+            "group_name": data["level_name"],
+            "students_count": len(students),
+            "avg_percent": avg_percent,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+        })
 
     os.makedirs("exports", exist_ok=True)
     filename = f"exports/exam_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
