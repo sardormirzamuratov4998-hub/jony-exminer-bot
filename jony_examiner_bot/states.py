@@ -39,6 +39,9 @@ class ExamStates(StatesGroup):
     retake_marking = State()
     retake_manual_text = State()
 
+    # SAQLANGAN GURUHNI BOSHQARISH (o'quvchini o'chirish)
+    manage_group_marking = State()
+
 
 class RegStates(StatesGroup):
     choose_role = State()
