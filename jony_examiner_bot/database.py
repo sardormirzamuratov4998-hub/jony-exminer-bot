@@ -1,4 +1,5 @@
 import aiosqlite
+import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -81,6 +82,32 @@ async def init_db():
                 username TEXT,
                 added_by INTEGER,
                 added_at TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS saved_group_students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                branch TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                students_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(branch, group_name)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS exam_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                examiner_telegram_id INTEGER,
+                examiner_name TEXT,
+                branch TEXT,
+                test_type TEXT,           -- unit | midterm
+                test_name TEXT,
+                group_name TEXT,
+                students_count INTEGER NOT NULL,
+                avg_percent REAL NOT NULL,
+                pass_count INTEGER NOT NULL,
+                fail_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
         await db.commit()
@@ -431,3 +458,140 @@ async def get_daily_report(date_str: str):
             "created_today_by_branch": created_today_by_branch,
             "accepted_today_by_examiner": accepted_today_by_examiner,
         }
+
+
+# ---------- 4) EXAMINERNING SHAXSIY JADVALI ----------
+
+async def get_examiner_upcoming_bookings(examiner_telegram_id: int):
+    """Shu examiner qabul qilgan, hali muddati o'tmagan (status='accepted') buyurtmalar."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM bookings WHERE examiner_telegram_id=? AND status='accepted' "
+            "ORDER BY exam_date, exam_time",
+            (examiner_telegram_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------- 5) SAQLANGAN O'QUVCHILAR RO'YXATI (guruh bo'yicha) ----------
+
+async def get_saved_group_students(branch: str, group_name: str):
+    """Shu filial + guruh nomi uchun oldin saqlangan o'quvchilar (surname/name), yoki bo'sh ro'yxat."""
+    if not branch or not group_name:
+        return []
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT students_json FROM saved_group_students WHERE branch=? AND group_name=?",
+            (branch, group_name),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return []
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+
+async def save_group_students(branch: str, group_name: str, students: list):
+    """Shu filial + guruh uchun o'quvchilar ro'yxatini saqlaydi/yangilaydi (surname/name juftliklari)."""
+    if not branch or not group_name:
+        return
+    students_json = json.dumps(students, ensure_ascii=False)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO saved_group_students (branch, group_name, students_json, updated_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(branch, group_name) DO UPDATE SET
+                 students_json=excluded.students_json, updated_at=excluded.updated_at""",
+            (branch, group_name, students_json, now_tashkent().isoformat()),
+        )
+        await db.commit()
+
+
+# ---------- 6) ADMIN QIDIRUV/FILTR ----------
+
+async def search_bookings(query: str, limit: int = 20):
+    """Ustoz ismi, guruh nomi, filial yoki test turi bo'yicha qidiradi."""
+    like = f"%{query.strip()}%"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT * FROM bookings
+               WHERE teacher_name LIKE ? OR group_name LIKE ? OR branch LIKE ? OR test_type LIKE ?
+               ORDER BY exam_date DESC, exam_time DESC
+               LIMIT ?""",
+            (like, like, like, like, limit),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------- 7) STATISTIK DASHBOARD ----------
+
+async def save_exam_result(data: dict):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO exam_results
+               (examiner_telegram_id, examiner_name, branch, test_type, test_name,
+                group_name, students_count, avg_percent, pass_count, fail_count, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                data.get("examiner_telegram_id"), data.get("examiner_name"), data.get("branch"),
+                data.get("test_type"), data.get("test_name"), data.get("group_name"),
+                data["students_count"], data["avg_percent"], data["pass_count"], data["fail_count"],
+                now_tashkent().isoformat(),
+            ),
+        )
+        await db.commit()
+
+
+async def get_stats(days: int = 30):
+    """Oxirgi N kunlik statistika: buyurtmalar, filial/examiner kesimida, o'rtacha ballar."""
+    cutoff_iso = (now_tashkent() - timedelta(days=days)).isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM bookings WHERE created_at >= ?", (cutoff_iso,))
+        bookings = [dict(r) for r in await cur.fetchall()]
+
+        cur = await db.execute("SELECT * FROM exam_results WHERE created_at >= ?", (cutoff_iso,))
+        results = [dict(r) for r in await cur.fetchall()]
+
+    total_bookings = len(bookings)
+    accepted_bookings = sum(1 for b in bookings if b["accepted_at"])
+
+    by_branch = {}
+    for b in bookings:
+        by_branch[b["branch"]] = by_branch.get(b["branch"], 0) + 1
+
+    by_examiner = {}
+    for r in results:
+        name = r["examiner_name"] or "Noma'lum"
+        entry = by_examiner.setdefault(name, {"count": 0, "_total_percent": 0.0})
+        entry["count"] += 1
+        entry["_total_percent"] += r["avg_percent"]
+    for entry in by_examiner.values():
+        entry["avg_percent"] = entry["_total_percent"] / entry["count"] if entry["count"] else 0
+        del entry["_total_percent"]
+
+    total_pass = sum(r["pass_count"] for r in results)
+    total_fail = sum(r["fail_count"] for r in results)
+
+    overall_avg_percent = None
+    if results:
+        total_n = sum(r["students_count"] for r in results)
+        if total_n:
+            overall_avg_percent = sum(r["avg_percent"] * r["students_count"] for r in results) / total_n
+
+    return {
+        "total_bookings": total_bookings,
+        "accepted_bookings": accepted_bookings,
+        "by_branch": by_branch,
+        "by_examiner": by_examiner,
+        "overall_avg_percent": overall_avg_percent,
+        "total_pass": total_pass,
+        "total_fail": total_fail,
+    }
