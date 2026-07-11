@@ -416,6 +416,29 @@ async def get_last_booking_by_group(telegram_id: int, group_name: str):
         return dict(row) if row else None
 
 
+async def find_teacher_group_names(telegram_id: int, query: str, limit: int = 8):
+    """Ustozning avvalgi buyurtmalari orasidan `query` so'zini o'z ichiga olgan guruh
+    nomlarini qidiradi (masalan 'Step 3' yozilsa 'Step 3 (Vikings)' ham topiladi).
+    Eng so'nggi buyurtma qilingan guruhlar birinchi bo'lib qaytadi."""
+    query = (query or "").strip()
+    if not query:
+        return []
+    like_query = f"%{query}%"
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            """SELECT group_name, MAX(created_at) AS last_created
+               FROM bookings
+               WHERE teacher_telegram_id=? AND LOWER(group_name) LIKE LOWER(?)
+               GROUP BY group_name
+               ORDER BY last_created DESC
+               LIMIT ?""",
+            (telegram_id, like_query, limit),
+        )
+        rows = await cur.fetchall()
+        return [r["group_name"] for r in rows]
+
+
 async def get_examiners_by_branch(branch: str, status: str = "active"):
     """'active' va eski 'approved' statusli examinerlarni ham qamrab oladi (eski ma'lumotlar bilan mos)."""
     statuses = ["active", "approved"] if status == "active" else [status]
