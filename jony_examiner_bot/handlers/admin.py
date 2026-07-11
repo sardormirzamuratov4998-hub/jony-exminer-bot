@@ -1,557 +1,868 @@
+import os
 from datetime import datetime
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.filters import Command
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import database as db
-from states import BookingStates
+from states import AdminStates
 from keyboards import (
-    test_type_booking_kb,
-    booking_confirm_kb,
-    accept_booking_kb,
-    cancel_kb,
-    build_main_menu_kb,
-    booking_branch_kb,
-    repeat_fields_kb,
-    REPEAT_FIELD_ORDER,
+    examiner_approve_kb,
+    admin_panel_kb,
+    branch_manage_kb,
+    branch_delete_confirm_kb,
+    test_type_manage_kb,
+    test_type_delete_confirm_kb,
+    grading_thresholds_kb,
+    GRADING_LABELS,
+    booking_field_manage_kb,
+    booking_field_delete_confirm_kb,
 )
 
 router = Router()
 
 
-async def _is_teacher(telegram_id: int):
-    user = await db.get_user(telegram_id)
-    return user if user and user["role"] == "TEACHER" else None
+class AddAdminStates(StatesGroup):
+    waiting_input = State()
 
 
-def _custom_fields_block(data) -> str:
-    labels = data.get("custom_field_labels") or {}
-    answers = data.get("custom_field_answers") or {}
-    if not answers:
-        return ""
-    lines = [f"{labels.get(key, key)}: {value}" for key, value in answers.items()]
-    return "\n" + "\n".join(lines)
+async def _require_admin(message: Message) -> bool:
+    if not await db.is_admin(message.from_user.id):
+        await message.answer("Bu komanda faqat adminlar uchun.")
+        return False
+    return True
 
 
-def _booking_summary(user, data) -> str:
-    return (
-        "📋 <b>Buyurtma ma'lumotlari:</b>\n\n"
-        f"Ustoz: {user['full_name']}\n"
-        f"Filial: {data['branch']}\n"
-        f"Sana: {data['exam_date']}\n"
-        f"Vaqt: {data['exam_time']}\n"
-        f"Test turi: {data['test_type']}"
-        + (f" ({data['test_name']})" if data.get("test_name") else "")
-        + f"\nGuruh: {data['group_name']}\n"
-        f"O'quvchilar soni: {data['students_count']}"
-        + _custom_fields_block(data)
-        + "\n\nYuborishni tasdiqlaysizmi?"
-    )
+# ---------- YORDAMCHI FUNKSIYALAR (komanda va tugma ikkalasida ham ishlatiladi) ----------
 
-
-@router.message(F.text == "📅 Imtihon buyurtma qilish")
-async def start_booking(message: Message, state: FSMContext):
-    user = await _is_teacher(message.from_user.id)
-    if not user:
+async def _send_pending(send):
+    pending = await db.get_pending_examiners()
+    if not pending:
+        await send("Kutilayotgan examiner so'rovlari yo'q.")
         return
-
-    branches = await db.get_teacher_branches(message.from_user.id)
-    if not branches:
-        branches = [user["branch"]]
-
-    if len(branches) == 1:
-        await state.update_data(branch=branches[0])
-        await state.set_state(BookingStates.exam_date)
-        await message.answer(
-            "Imtihon sanasini kiriting (masalan: 27.06.2026):",
-            reply_markup=cancel_kb(),
-        )
-    else:
-        await state.set_state(BookingStates.choose_branch)
-        await message.answer(
-            "Qaysi filial uchun buyurtma qilyapsiz?",
-            reply_markup=booking_branch_kb(branches),
+    for p in pending:
+        uname = f"@{p['username']}" if p["username"] else "username yo'q"
+        await send(
+            f"Ism: {p['full_name']}\nFilial: {p['branch']}\nTelegram: {uname}",
+            reply_markup=examiner_approve_kb(p["telegram_id"]),
         )
 
 
-_STATUS_LABELS = {
-    "pending": ("🟡", "Kutilmoqda"),
-    "accepted": ("🟢", "Qabul qilingan"),
-    "cancelled": ("🔴", "Bekor qilingan"),
-    "expired": ("⚪️", "Muddati o'tgan"),
-}
-
-
-@router.message(F.text == "📋 Mening buyurtmalarim")
-async def my_bookings(message: Message):
-    user = await _is_teacher(message.from_user.id)
-    if not user:
-        return
-
-    bookings = await db.get_teacher_bookings(message.from_user.id)
+async def _send_bookings(send):
+    bookings = await db.get_active_bookings()
     if not bookings:
-        await message.answer("Sizda hozircha buyurtmalar yo'q.")
+        await send("Faol buyurtmalar yo'q.")
         return
-
-    lines = ["📋 <b>Mening buyurtmalarim:</b>"]
     for b in bookings:
-        emoji, label = _STATUS_LABELS.get(b["status"], ("⚪️", b["status"]))
-        test_info = b["test_type"]
-        if b.get("test_name"):
-            test_info += f" ({b['test_name']})"
-        examiner_line = f"\nExaminer: {b['examiner_name']}" if b.get("examiner_name") else ""
-        lines.append(
-            f"\n{emoji} <b>{b['exam_date']} {b['exam_time']}</b> — {label}\n"
-            f"Filial: {b['branch']}\nGuruh: {b['group_name']}\n"
-            f"Turi: {test_info}\nO'quvchilar soni: {b['students_count']}"
-            f"{examiner_line}"
+        status_emoji = "🟡" if b["status"] == "pending" else "🟢"
+        examiner = f"\nExaminer: {b['examiner_name']}" if b["examiner_name"] else "\nExaminer: kutilmoqda"
+        text = (
+            f"{status_emoji} <b>{b['exam_date']} {b['exam_time']}</b>\n"
+            f"Filial: {b['branch']}\nUstoz: {b['teacher_name']}\n"
+            f"Guruh: {b['group_name']}{examiner}"
         )
-    await message.answer("\n".join(lines))
+        builder = InlineKeyboardBuilder()
+        builder.button(text="❌ Bekor qilish", callback_data=f"cancel_booking:{b['id']}")
+        builder.adjust(1)
+        await send(text, reply_markup=builder.as_markup())
 
 
-@router.callback_query(BookingStates.choose_branch, F.data.startswith("bookbranch:"))
-async def choose_booking_branch(callback: CallbackQuery, state: FSMContext):
-    branch = callback.data.split(":", 1)[1]
-    await state.update_data(branch=branch)
-    await state.set_state(BookingStates.exam_date)
-    await callback.message.edit_text(f"Filial: {branch} ✅")
-    await callback.message.answer("Imtihon sanasini kiriting (masalan: 27.06.2026):")
-    await callback.answer()
-
-
-@router.message(BookingStates.exam_date)
-async def get_exam_date(message: Message, state: FSMContext):
-    try:
-        datetime.strptime(message.text.strip(), "%d.%m.%Y")
-    except ValueError:
-        await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
+async def _send_staff(send):
+    staff = await db.get_all_staff()
+    if not staff:
+        await send("Hozircha ro'yxatdan o'tgan xodim yo'q.")
         return
-    await state.update_data(exam_date=message.text.strip())
-    await state.set_state(BookingStates.exam_time)
-    await message.answer("Imtihon vaqtini kiriting (masalan: 08:00):")
+
+    by_branch = {}
+    for s in staff:
+        by_branch.setdefault(s["branch"], []).append(s)
+
+    for branch, users in by_branch.items():
+        lines = [f"📍 <b>{branch}</b>\n"]
+        builder = InlineKeyboardBuilder()
+        for u in users:
+            role_label = "👩‍🏫 Ustoz" if u["role"] == "TEACHER" else "🧑‍💼 Examiner"
+            status_label = {
+                "active": "", "approved": "", "pending": " (kutilmoqda)", "rejected": " (rad etilgan)",
+            }.get(u["status"], "")
+            lines.append(f"{role_label}: {u['full_name']}{status_label}")
+            builder.button(text=f"❌ {u['full_name']}", callback_data=f"remove_staff:{u['id']}")
+        builder.adjust(1)
+        await send("\n".join(lines), reply_markup=builder.as_markup())
 
 
-@router.message(BookingStates.exam_time)
-async def get_exam_time(message: Message, state: FSMContext):
-    try:
-        datetime.strptime(message.text.strip(), "%H:%M")
-    except ValueError:
-        await message.answer("Noto'g'ri format. Masalan: 08:00 shaklida kiriting:")
+async def _send_admins(send):
+    admins = await db.list_admins()
+    if not admins:
+        await send("Hozircha adminlar yo'q.")
         return
-    await state.update_data(exam_time=message.text.strip())
-    await state.set_state(BookingStates.test_type)
-    test_types = await db.get_test_types()
-    await message.answer("Test turini tanlang:", reply_markup=test_type_booking_kb(test_types))
+    lines = ["👤 <b>Adminlar ro'yxati:</b>\n"]
+    for a in admins:
+        name = a["full_name"] or "Noma'lum"
+        uname = f"@{a['username']}" if a["username"] else ""
+        lines.append(f"• {name} {uname} — ID: {a['telegram_id']}")
+    await send("\n".join(lines))
 
 
-@router.callback_query(BookingStates.test_type, F.data.startswith("booking_type:"))
-async def get_test_type(callback: CallbackQuery, state: FSMContext):
-    test_type = callback.data.split(":", 1)[1]
-    await state.update_data(test_type=test_type)
-    if test_type == "UNIT TEST":
-        await state.set_state(BookingStates.unit_name)
-        await callback.message.edit_text("Unit raqamini kiriting (masalan: Unit 7):")
+async def _send_daily_report(send, bot=None):
+    today = db.now_tashkent().strftime("%d.%m.%Y")
+    report = await db.get_daily_report(today)
+    lines = [f"📊 <b>Kunlik hisobot — {today}</b>\n"]
+
+    lines.append("📥 <b>Kelib tushgan buyurtmalar (filial bo'yicha):</b>")
+    if report["created_today_by_branch"]:
+        for branch, count in report["created_today_by_branch"].items():
+            lines.append(f"• {branch}: {count} ta")
     else:
-        await state.update_data(test_name=None)
-        await state.set_state(BookingStates.group_name)
-        await callback.message.edit_text(f"Test turi: {test_type} ✅")
-        await callback.message.answer("Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):")
-    await callback.answer()
+        lines.append("• Bugun buyurtma tushmagan")
 
-
-@router.message(BookingStates.unit_name)
-async def get_unit_name(message: Message, state: FSMContext):
-    await state.update_data(test_name=message.text.strip())
-    await state.set_state(BookingStates.group_name)
-    await message.answer("Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):")
-
-
-@router.message(BookingStates.group_name)
-async def get_group_name(message: Message, state: FSMContext):
-    await state.update_data(group_name=message.text.strip())
-    await state.set_state(BookingStates.students_count)
-    await message.answer("O'quvchilar sonini kiriting:")
-
-
-async def _go_to_confirm(answer_func, telegram_id: int, state: FSMContext):
-    data = await state.get_data()
-    user = await db.get_user(telegram_id)
-    await state.set_state(BookingStates.confirm)
-    await answer_func(_booking_summary(user, data), reply_markup=booking_confirm_kb())
-
-
-async def _ask_next_custom_field(answer_func, telegram_id: int, state: FSMContext):
-    data = await state.get_data()
-    queue = data.get("custom_field_queue") or []
-    if not queue:
-        await _go_to_confirm(answer_func, telegram_id, state)
-        return
-    label = data["custom_field_labels"][queue[0]]
-    await answer_func(f"{label}:")
-
-
-@router.message(BookingStates.students_count)
-async def get_students_count(message: Message, state: FSMContext):
-    if not message.text.strip().isdigit():
-        await message.answer("Faqat son kiriting:")
-        return
-    await state.update_data(students_count=int(message.text.strip()))
-
-    fields = await db.get_booking_fields()
-    if fields:
-        await state.update_data(
-            custom_field_queue=[f["field_key"] for f in fields],
-            custom_field_labels={f["field_key"]: f["label"] for f in fields},
-            custom_field_answers={},
-        )
-        await state.set_state(BookingStates.custom_field_input)
-        await _ask_next_custom_field(message.answer, message.from_user.id, state)
+    lines.append("\n✅ <b>Qabul qilingan imtihonlar (examiner bo'yicha):</b>")
+    if report["accepted_today_by_examiner"]:
+        for name, count in report["accepted_today_by_examiner"].items():
+            lines.append(f"• {name}: {count} ta")
     else:
-        await state.update_data(custom_field_answers={}, custom_field_labels={})
-        await _go_to_confirm(message.answer, message.from_user.id, state)
+        lines.append("• Bugun hech kim imtihon qabul qilmagan")
+
+    await send("\n".join(lines))
 
 
-@router.message(BookingStates.custom_field_input)
-async def get_custom_field_answer(message: Message, state: FSMContext):
-    data = await state.get_data()
-    queue = list(data.get("custom_field_queue") or [])
-    if not queue:
-        await _go_to_confirm(message.answer, message.from_user.id, state)
+async def _send_stats(send, days: int = 30):
+    stats = await db.get_stats(days)
+    lines = [f"📈 <b>Statistika (oxirgi {days} kun)</b>\n"]
+
+    lines.append(f"📥 Jami buyurtmalar: {stats['total_bookings']} ta")
+    lines.append(f"✅ Qabul qilingan: {stats['accepted_bookings']} ta")
+    if stats["total_bookings"]:
+        rate = stats["accepted_bookings"] / stats["total_bookings"] * 100
+        lines.append(f"📊 Qabul qilish darajasi: {rate:.0f}%")
+
+    if stats["by_branch"]:
+        lines.append("\n📍 <b>Filial bo'yicha buyurtmalar:</b>")
+        for branch, count in stats["by_branch"].items():
+            lines.append(f"• {branch}: {count} ta")
+
+    if stats["by_examiner"]:
+        lines.append("\n🧑‍💼 <b>Examinerlar bo'yicha o'tkazilgan testlar:</b>")
+        for name, info in stats["by_examiner"].items():
+            lines.append(f"• {name}: {info['count']} ta test, o'rtacha {info['avg_percent']:.0f}%")
+
+    if stats["overall_avg_percent"] is not None:
+        lines.append(f"\n🎯 Umumiy o'rtacha ball: {stats['overall_avg_percent']:.0f}%")
+        lines.append(f"✅ PASS: {stats['total_pass']} ta   ❌ FAIL: {stats['total_fail']} ta")
+    else:
+        lines.append("\nHali natija statistikasi yo'q (test yakunlanmagan).")
+
+    await send("\n".join(lines))
+
+
+# ---------- KOMANDALAR ----------
+
+@router.message(Command("admin_group"))
+async def set_admin_group(message: Message):
+    if not await _require_admin(message):
         return
-    key = queue.pop(0)
-    answers = dict(data.get("custom_field_answers") or {})
-    answers[key] = message.text.strip()
-    await state.update_data(custom_field_queue=queue, custom_field_answers=answers)
-    await _ask_next_custom_field(message.answer, message.from_user.id, state)
+    if message.chat.type not in ("group", "supergroup"):
+        await message.answer("Bu komanda faqat guruhda ishlaydi.")
+        return
+    await db.set_setting("admin_group_id", str(message.chat.id))
+    await message.answer(f"✅ Bu guruh admin guruh sifatida belgilandi.\nChat ID: {message.chat.id}")
 
 
-@router.callback_query(BookingStates.confirm, F.data == "booking_cancel")
-async def booking_cancel(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    is_adm = await db.is_admin(callback.from_user.id)
-    await callback.message.edit_text("Bekor qilindi.")
-    await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
-    await callback.answer()
-
-
-@router.callback_query(BookingStates.confirm, F.data == "booking_confirm")
-async def booking_confirm(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    user = await db.get_user(callback.from_user.id)
-
-    booking_id = await db.create_booking({
-        "teacher_telegram_id": callback.from_user.id,
-        "teacher_name": user["full_name"],
-        "branch": data["branch"],
-        "exam_date": data["exam_date"],
-        "exam_time": data["exam_time"],
-        "test_type": data["test_type"],
-        "test_name": data.get("test_name"),
-        "group_name": data["group_name"],
-        "students_count": data["students_count"],
-    })
-    for key, value in (data.get("custom_field_answers") or {}).items():
-        await db.set_booking_field_value(booking_id, key, value)
-    await state.clear()
-
-    is_adm = await db.is_admin(callback.from_user.id)
-    await callback.message.edit_text("✅ Buyurtmangiz yuborildi! Examiner qabul qilishini kuting.")
-    await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
-
-    text = (
-        f"🔔 <b>Yangi imtihon buyurtmasi</b>\n\n"
-        f"Ustoz: {user['full_name']}\n"
-        f"Filial: {data['branch']}\n"
-        f"Sana: {data['exam_date']}\n"
-        f"Vaqt: {data['exam_time']}\n"
-        f"Test turi: {data['test_type']}"
-        + (f" ({data['test_name']})" if data.get("test_name") else "")
-        + f"\nGuruh: {data['group_name']}\n"
-        f"O'quvchilar soni: {data['students_count']}"
-        + _custom_fields_block(data)
+@router.message(Command("add_admin"))
+async def add_admin_start(message: Message, state: FSMContext):
+    if not await _require_admin(message):
+        return
+    await state.set_state(AddAdminStates.waiting_input)
+    await message.answer(
+        "Yangi adminning Telegram ID sini yuboring,\n"
+        "yoki undan (yoki u yuborgan istalgan xabarni) forward qiling."
     )
 
-    examiners = await db.get_examiners_by_branch(data["branch"])
-    for ex in examiners:
-        try:
-            sent = await callback.bot.send_message(
-                ex["telegram_id"], text, reply_markup=accept_booking_kb(booking_id)
-            )
-            await db.add_notification(booking_id, sent.chat.id, sent.message_id)
-        except Exception:
-            pass
 
-    admin_group_id = await db.get_setting("admin_group_id")
-    if admin_group_id:
-        try:
-            sent = await callback.bot.send_message(int(admin_group_id), text)
-            await db.add_notification(booking_id, sent.chat.id, sent.message_id)
-        except Exception:
-            pass
-
+@router.callback_query(F.data == "admin_add")
+async def add_admin_start_cb(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AddAdminStates.waiting_input)
+    await callback.message.answer(
+        "Yangi adminning Telegram ID sini yuboring,\n"
+        "yoki undan (yoki u yuborgan istalgan xabarni) forward qiling."
+    )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("accept_booking:"))
-async def accept_booking_handler(callback: CallbackQuery):
-    booking_id = int(callback.data.split(":")[1])
-    booking = await db.get_booking(booking_id)
-    if not booking:
-        await callback.answer("Buyurtma topilmadi.", show_alert=True)
-        return
+@router.message(AddAdminStates.waiting_input)
+async def add_admin_process(message: Message, state: FSMContext):
+    await state.clear()
+    target_id = None
+    target_name = None
+    target_username = None
 
-    if booking["status"] != "pending":
-        msg = "Kechirasiz, bu buyurtma allaqachon band qilingan."
-        if booking["examiner_name"]:
-            msg = f"Kechirasiz, bu buyurtmani allaqachon {booking['examiner_name']} qabul qilgan."
-        await callback.answer(msg, show_alert=True)
-        return
-
-    conflict = await db.examiner_has_conflict(
-        callback.from_user.id, booking["exam_date"], booking["exam_time"]
-    )
-    if conflict:
-        await callback.answer(
-            "Sizda shu sana va vaqtga allaqachon qabul qilingan imtihon bor. "
-            "Bu buyurtmani qabul qila olmaysiz.",
-            show_alert=True,
+    if message.forward_from:
+        target_id = message.forward_from.id
+        target_name = message.forward_from.full_name
+        target_username = message.forward_from.username
+    elif message.text and message.text.strip().isdigit():
+        target_id = int(message.text.strip())
+    else:
+        await message.answer(
+            "Tushunmadim. Telegram ID (faqat raqam) yuboring yoki xabarni forward qiling."
         )
         return
 
-    examiner = await db.get_user(callback.from_user.id)
-    success = await db.accept_booking(booking_id, callback.from_user.id, examiner["full_name"])
-    if not success:
-        await callback.answer("Kechirasiz, bu buyurtma allaqachon band qilingan.", show_alert=True)
-        return
-
-    await callback.answer("Qabul qilindi ✅")
-
-    notifications = await db.get_notifications(booking_id)
-    for note in notifications:
-        try:
-            await callback.bot.edit_message_text(
-                chat_id=note["chat_id"],
-                message_id=note["message_id"],
-                text=(callback.message.text or "") + f"\n\n✅ Qabul qilindi: {examiner['full_name']}",
-            )
-        except Exception:
-            pass
-
+    await db.add_admin(target_id, target_name, target_username, added_by=message.from_user.id)
+    await message.answer(f"✅ {target_name or target_id} admin sifatida qo'shildi.")
     try:
-        await callback.bot.send_message(
-            booking["teacher_telegram_id"],
-            f"✅ Imtihoningizni <b>{examiner['full_name']}</b> qabul qildi!\n\n"
-            f"Sana: {booking['exam_date']}\nVaqt: {booking['exam_time']}",
+        await message.bot.send_message(
+            target_id,
+            "Tabriklaymiz! Siz Jony Academy botida <b>admin</b> etib tayinlandingiz.\n"
+            "Endi /start bosib admin panelidan foydalanishingiz mumkin.",
         )
     except Exception:
         pass
 
 
-# =========================================================
-# OXIRGI BUYURTMANI TAKRORLASH (avval imtihon topshirgan guruh)
-# =========================================================
-
-def _repeat_source_summary(b: dict) -> str:
-    test_info = b["test_type"]
-    if b.get("test_name"):
-        test_info += f" ({b['test_name']})"
-    return (
-        f"🔁 Topilgan oxirgi buyurtma — <b>{b['group_name']}</b>:\n"
-        f"Filial: {b['branch']}\nSana: {b['exam_date']}\nVaqt: {b['exam_time']}\n"
-        f"Test turi: {test_info}\nO'quvchilar soni: {b['students_count']}"
-    )
-
-
-async def _advance_repeat_queue(answer_func, telegram_id: int, state: FSMContext):
-    """Navbatdagi belgilangan maydonni so'raydi; navbat tugasa — yakuniy tasdiqlashni ko'rsatadi."""
-    data = await state.get_data()
-    queue = list(data.get("repeat_queue", []))
-
-    if not queue:
-        user = await db.get_user(telegram_id)
-        await state.set_state(BookingStates.confirm)
-        await answer_func(_booking_summary(user, data), reply_markup=booking_confirm_kb())
+@router.message(Command("remove_admin"))
+async def remove_admin_cmd(message: Message):
+    if not await _require_admin(message):
         return
-
-    field = queue[0]
-    await state.update_data(repeat_queue=queue[1:])
-
-    if field == "branch":
-        user = await db.get_user(telegram_id)
-        branches = await db.get_teacher_branches(telegram_id)
-        if not branches:
-            branches = [user["branch"]]
-        await state.set_state(BookingStates.repeat_branch)
-        await answer_func("Qaysi filial uchun buyurtma qilyapsiz?", reply_markup=booking_branch_kb(branches))
-    elif field == "exam_date":
-        await state.set_state(BookingStates.repeat_exam_date)
-        await answer_func("Imtihon sanasini kiriting (masalan: 27.06.2026):")
-    elif field == "exam_time":
-        await state.set_state(BookingStates.repeat_exam_time)
-        await answer_func("Imtihon vaqtini kiriting (masalan: 08:00):")
-    elif field == "test_type":
-        await state.set_state(BookingStates.repeat_test_type)
-        test_types = await db.get_test_types()
-        await answer_func("Test turini tanlang:", reply_markup=test_type_booking_kb(test_types))
-    elif field == "students_count":
-        await state.set_state(BookingStates.repeat_students_count)
-        await answer_func("O'quvchilar sonini kiriting:")
-
-
-@router.message(F.text == "🔁 avval imtihon topshirgan guruh")
-async def start_repeat_booking(message: Message, state: FSMContext):
-    user = await _is_teacher(message.from_user.id)
-    if not user:
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Foydalanish: /remove_admin <telegram_id>")
         return
-
-    await state.set_state(BookingStates.repeat_group_name)
-    await message.answer(
-        "Avval imtihon topshirgan guruh nomini kiriting (masalan: Step 3 (Vikings)):",
-        reply_markup=cancel_kb(),
-    )
+    target_id = int(parts[1])
+    await db.remove_admin(target_id)
+    await message.answer(f"✅ {target_id} adminlikdan olib tashlandi.")
 
 
-@router.message(BookingStates.repeat_group_name)
-async def get_repeat_group_name(message: Message, state: FSMContext):
-    group_name = message.text.strip()
-    last = await db.get_last_booking_by_group(message.from_user.id, group_name)
-    if not last:
-        await message.answer(
-            f"\"{group_name}\" nomli guruh uchun avvalgi buyurtma topilmadi. "
-            "Boshqa nom kiriting yoki bekor qiling:"
-        )
+@router.message(Command("admins"))
+async def list_admins_cmd(message: Message):
+    if not await _require_admin(message):
         return
-
-    await state.update_data(
-        group_name=last["group_name"],
-        repeat_source=last,
-        repeat_selected=[],
-    )
-    await state.set_state(BookingStates.repeat_fields_select)
-    await message.answer(
-        _repeat_source_summary(last)
-        + "\n\nQaysi ma'lumotlarni qayta kiritmoqchisiz?\n"
-        "☑️ belgilangan maydonlar so'raladi, qolganlari avvalgidek qoladi.",
-        reply_markup=repeat_fields_kb(set()),
-    )
+    await _send_admins(message.answer)
 
 
-@router.callback_query(BookingStates.repeat_fields_select, F.data.startswith("repeat_toggle:"))
-async def toggle_repeat_field(callback: CallbackQuery, state: FSMContext):
-    key = callback.data.split(":", 1)[1]
-    data = await state.get_data()
-    selected = set(data.get("repeat_selected", []))
-    if key in selected:
-        selected.discard(key)
-    else:
-        selected.add(key)
-    await state.update_data(repeat_selected=list(selected))
-    await callback.message.edit_reply_markup(reply_markup=repeat_fields_kb(selected))
+@router.callback_query(F.data == "admin_admins")
+async def list_admins_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_admins(callback.message.answer)
     await callback.answer()
 
 
-@router.callback_query(BookingStates.repeat_fields_select, F.data == "repeat_cancel")
-async def cancel_repeat_booking(callback: CallbackQuery, state: FSMContext):
+@router.message(Command("pending"))
+async def pending_examiners_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_pending(message.answer)
+
+
+@router.callback_query(F.data == "admin_pending")
+async def pending_examiners_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_pending(callback.message.answer)
+    await callback.answer()
+
+
+@router.message(Command("bookings"))
+async def bookings_overview_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_bookings(message.answer)
+
+
+@router.callback_query(F.data == "admin_bookings")
+async def bookings_overview_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_bookings(callback.message.answer)
+    await callback.answer()
+
+
+@router.message(Command("staff"))
+async def staff_list_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_staff(message.answer)
+
+
+@router.callback_query(F.data == "admin_staff")
+async def staff_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_staff(callback.message.answer)
+    await callback.answer()
+
+
+# ---------- FILIALLARNI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_branches")
+async def branches_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    branches = await db.get_branches()
+    text = (
+        "🏢 <b>Filiallar</b>\n\n"
+        + ("\n".join(f"• {b}" for b in branches) if branches else "Hozircha filial yo'q.")
+        + "\n\nO'chirish uchun filialni tanlang yoki yangi filial qo'shing:"
+    )
+    await callback.message.answer(text, reply_markup=branch_manage_kb(branches))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "branch_add")
+async def branch_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.branch_add_input)
+    await callback.message.answer("Yangi filial nomini kiriting (masalan: Chilonzor):")
+    await callback.answer()
+
+
+@router.message(AdminStates.branch_add_input)
+async def branch_add_save(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.answer("Filial nomini kiriting:")
+        return
+    ok = await db.add_branch(name)
     await state.clear()
-    is_adm = await db.is_admin(callback.from_user.id)
+    if not ok:
+        await message.answer(f"⚠️ \"{name}\" nomli filial allaqachon mavjud.")
+        return
+    branches = await db.get_branches()
+    await message.answer(
+        f"✅ \"{name}\" filiali qo'shildi.",
+        reply_markup=branch_manage_kb(branches),
+    )
+
+
+@router.callback_query(F.data.startswith("branch_del:"))
+async def branch_delete_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await callback.message.answer(
+        f"<b>{name}</b> filialini o'chirmoqchimisiz?\n\n"
+        "⚠️ Diqqat: bu filial nomi allaqachon ishlatilgan foydalanuvchilar/buyurtmalar "
+        "tarixiy yozuvlarida qoladi, faqat yangi tanlov ro'yxatidan olib tashlanadi.",
+        reply_markup=branch_delete_confirm_kb(name),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("branch_del_yes:"))
+async def branch_delete_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await db.remove_branch(name)
+    branches = await db.get_branches()
+    await callback.message.edit_text(f"✅ \"{name}\" filiali o'chirildi.")
+    await callback.message.answer(
+        "🏢 <b>Filiallar</b>\n\n"
+        + ("\n".join(f"• {b}" for b in branches) if branches else "Hozircha filial yo'q."),
+        reply_markup=branch_manage_kb(branches),
+    )
+    await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "branch_del_no")
+async def branch_delete_no(callback: CallbackQuery):
     await callback.message.edit_text("Bekor qilindi.")
-    await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
     await callback.answer()
 
 
-@router.callback_query(BookingStates.repeat_fields_select, F.data == "repeat_start")
-async def repeat_start(callback: CallbackQuery, state: FSMContext):
+# ---------- TEST TURLARINI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_test_types")
+async def test_types_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    test_types = await db.get_test_types()
+    text = (
+        "🧪 <b>Test turlari</b>\n\n"
+        + ("\n".join(f"• {t}" for t in test_types) if test_types else "Hozircha test turi yo'q.")
+        + "\n\nO'chirish uchun test turini tanlang yoki yangisini qo'shing:"
+    )
+    await callback.message.answer(text, reply_markup=test_type_manage_kb(test_types))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "testtype_add")
+async def test_type_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.testtype_add_input)
+    await callback.message.answer("Yangi test turi nomini kiriting (masalan: PLACEMENT TEST):")
+    await callback.answer()
+
+
+@router.message(AdminStates.testtype_add_input)
+async def test_type_add_save(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.answer("Test turi nomini kiriting:")
+        return
+    ok = await db.add_test_type(name)
+    await state.clear()
+    if not ok:
+        await message.answer(f"⚠️ \"{name}\" nomli test turi allaqachon mavjud.")
+        return
+    test_types = await db.get_test_types()
+    await message.answer(
+        f"✅ \"{name}\" test turi qo'shildi.",
+        reply_markup=test_type_manage_kb(test_types),
+    )
+
+
+@router.callback_query(F.data.startswith("testtype_del:"))
+async def test_type_delete_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await callback.message.answer(
+        f"<b>{name}</b> test turini o'chirmoqchimisiz?\n\n"
+        "⚠️ Diqqat: bu test turi allaqachon ishlatilgan buyurtmalar tarixiy "
+        "yozuvlarida qoladi, faqat yangi tanlov ro'yxatidan olib tashlanadi.",
+        reply_markup=test_type_delete_confirm_kb(name),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("testtype_del_yes:"))
+async def test_type_delete_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await db.remove_test_type(name)
+    test_types = await db.get_test_types()
+    await callback.message.edit_text(f"✅ \"{name}\" test turi o'chirildi.")
+    await callback.message.answer(
+        "🧪 <b>Test turlari</b>\n\n"
+        + ("\n".join(f"• {t}" for t in test_types) if test_types else "Hozircha test turi yo'q."),
+        reply_markup=test_type_manage_kb(test_types),
+    )
+    await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "testtype_del_no")
+async def test_type_delete_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
+# ---------- BAHOLASH CHEGARALARINI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_grading")
+async def grading_thresholds_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    thresholds = await db.get_grading_thresholds()
+    await callback.message.answer(
+        "🎯 <b>Baholash chegaralari</b>\n\n"
+        "O'zgartirmoqchi bo'lgan chegarani tanlang (foizda, shu qiymatdan boshlab "
+        "shu daraja qo'yiladi):",
+        reply_markup=grading_thresholds_kb(thresholds),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("grading_edit:"))
+async def grading_edit_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    key = callback.data.split(":", 1)[1]
+    if key not in GRADING_LABELS:
+        await callback.answer("Noma'lum chegara.", show_alert=True)
+        return
+    thresholds = await db.get_grading_thresholds()
+    await state.set_state(AdminStates.grading_input)
+    await state.update_data(grading_key=key)
+    await callback.message.answer(
+        f"{GRADING_LABELS[key]}\nHozirgi qiymat: <b>{thresholds[key]}%</b>\n\n"
+        "Yangi qiymatni foizda kiriting (masalan: 90):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.grading_input)
+async def grading_edit_save(message: Message, state: FSMContext):
     data = await state.get_data()
-    selected = set(data.get("repeat_selected", []))
-    source = data["repeat_source"]
+    key = data.get("grading_key")
+    if key not in GRADING_LABELS:
+        await state.clear()
+        await message.answer("Xatolik yuz berdi, qaytadan urinib ko'ring.")
+        return
+    try:
+        value = float(message.text.strip().replace(",", "."))
+        if not (0 <= value <= 100):
+            raise ValueError
+    except ValueError:
+        await message.answer("Noto'g'ri qiymat. 0 dan 100 gacha son kiriting (masalan: 90):")
+        return
+    await db.set_grading_threshold(key, value)
+    await state.clear()
+    thresholds = await db.get_grading_thresholds()
+    await message.answer(
+        f"✅ {GRADING_LABELS[key]} endi: <b>{value}%</b>",
+        reply_markup=grading_thresholds_kb(thresholds),
+    )
 
-    prefill = {}
-    if "branch" not in selected:
-        prefill["branch"] = source["branch"]
-    if "exam_date" not in selected:
-        prefill["exam_date"] = source["exam_date"]
-    if "exam_time" not in selected:
-        prefill["exam_time"] = source["exam_time"]
-    if "test_type" not in selected:
-        prefill["test_type"] = source["test_type"]
-        prefill["test_name"] = source.get("test_name")
-    if "students_count" not in selected:
-        prefill["students_count"] = source["students_count"]
 
+# ---------- BUYURTMA QO'SHIMCHA MAYDONLARINI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_booking_fields")
+async def booking_fields_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
     fields = await db.get_booking_fields()
-    source_values = await db.get_booking_field_values(source["id"])
-    prefill["custom_field_answers"] = {
-        f["field_key"]: source_values[f["field_key"]]
-        for f in fields if f["field_key"] in source_values
+    text = (
+        "📝 <b>Buyurtma maydonlari</b>\n\n"
+        + ("\n".join(f"• {f['label']}" for f in fields) if fields else "Hozircha qo'shimcha maydon yo'q.")
+        + "\n\nBular — ustoz imtihon buyurtma qilayotganda standart maydonlardan (filial, "
+        "sana, vaqt, test turi, guruh, o'quvchilar soni) tashqari qo'shimcha so'raladigan "
+        "maydonlar.\n\nO'chirish uchun tanlang yoki yangisini qo'shing:"
+    )
+    await callback.message.answer(text, reply_markup=booking_field_manage_kb(fields))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bookfield_add")
+async def booking_field_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.booking_field_add_input)
+    await callback.message.answer(
+        "Yangi maydon nomini kiriting (masalan: Sinf raqami, Telefon raqami):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.booking_field_add_input)
+async def booking_field_add_save(message: Message, state: FSMContext):
+    label = message.text.strip()
+    if not label:
+        await message.answer("Maydon nomini kiriting:")
+        return
+    ok = await db.add_booking_field(label)
+    await state.clear()
+    if not ok:
+        await message.answer(f"⚠️ \"{label}\" nomli maydon allaqachon mavjud.")
+        return
+    fields = await db.get_booking_fields()
+    await message.answer(
+        f"✅ \"{label}\" maydoni qo'shildi. Endi ustozlar buyurtma berayotganda shu maydon ham so'raladi.",
+        reply_markup=booking_field_manage_kb(fields),
+    )
+
+
+@router.callback_query(F.data.startswith("bookfield_del:"))
+async def booking_field_delete_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    field_key = callback.data.split(":", 1)[1]
+    fields = {f["field_key"]: f["label"] for f in await db.get_booking_fields()}
+    label = fields.get(field_key, field_key)
+    await callback.message.answer(
+        f"<b>{label}</b> maydonini o'chirmoqchimisiz?\n\n"
+        "⚠️ Diqqat: bu maydon bo'yicha eski buyurtmalarda kiritilgan javoblar tarixiy "
+        "yozuvlarda qoladi, faqat yangi buyurtmalarda endi so'ralmaydi.",
+        reply_markup=booking_field_delete_confirm_kb(field_key),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("bookfield_del_yes:"))
+async def booking_field_delete_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    field_key = callback.data.split(":", 1)[1]
+    await db.remove_booking_field(field_key)
+    fields = await db.get_booking_fields()
+    await callback.message.edit_text("✅ Maydon o'chirildi.")
+    await callback.message.answer(
+        "📝 <b>Buyurtma maydonlari</b>\n\n"
+        + ("\n".join(f"• {f['label']}" for f in fields) if fields else "Hozircha qo'shimcha maydon yo'q."),
+        reply_markup=booking_field_manage_kb(fields),
+    )
+    await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "bookfield_del_no")
+async def booking_field_delete_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
+@router.message(Command("daily_report"))
+async def daily_report_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_daily_report(message.answer)
+
+
+@router.callback_query(F.data == "admin_daily_report")
+async def daily_report_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_daily_report(callback.message.answer)
+    await callback.answer()
+
+
+def _build_backup_document():
+    if not os.path.exists(db.DB_PATH):
+        return None, None
+    date_str = db.now_tashkent().strftime("%d.%m.%Y %H:%M")
+    document = FSInputFile(db.DB_PATH, filename=f"backup_{db.now_tashkent().strftime('%Y%m%d_%H%M')}.db")
+    caption = f"🗄 Bazaning zaxira nusxasi — {date_str}"
+    return document, caption
+
+
+@router.message(Command("backup"))
+async def backup_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    document, caption = _build_backup_document()
+    if not document:
+        await message.answer("Baza fayli topilmadi.")
+        return
+    await message.answer_document(document, caption=caption)
+
+
+@router.callback_query(F.data == "admin_backup")
+async def backup_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    document, caption = _build_backup_document()
+    if not document:
+        await callback.answer("Baza fayli topilmadi.", show_alert=True)
+        return
+    await callback.message.answer_document(document, caption=caption)
+    await callback.answer()
+
+
+@router.message(Command("stats"))
+async def stats_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_stats(message.answer)
+
+
+@router.callback_query(F.data == "admin_stats")
+async def stats_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_stats(callback.message.answer)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_search")
+async def search_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.search_query)
+    await callback.message.answer(
+        "🔍 Qidiruv so'zini kiriting (ustoz ismi, guruh nomi, filial yoki test turi):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.search_query)
+async def search_process(message: Message, state: FSMContext):
+    await state.clear()
+    query = message.text.strip()
+    results = await db.search_bookings(query)
+    if not results:
+        await message.answer(f"\"{query}\" bo'yicha hech narsa topilmadi.")
+        return
+
+    status_labels = {
+        "pending": "🟡 kutilmoqda",
+        "accepted": "🟢 qabul qilingan",
+        "cancelled": "🔴 bekor qilingan",
+        "expired": "⚪️ muddati o'tgan",
     }
-    prefill["custom_field_labels"] = {f["field_key"]: f["label"] for f in fields}
+    lines = [f"🔍 <b>\"{query}\" bo'yicha natijalar ({len(results)} ta):</b>\n"]
+    for b in results:
+        lines.append(
+            f"{status_labels.get(b['status'], b['status'])} — {b['exam_date']} {b['exam_time']}\n"
+            f"   Filial: {b['branch']}, Ustoz: {b['teacher_name']}\n"
+            f"   Guruh: {b['group_name']}, Turi: {b['test_type']}"
+        )
+    text = "\n\n".join(lines)
+    if len(text) > 3500:
+        text = text[:3500] + "\n\n... (natijalar ko'p, qidiruvni aniqroq kiriting)"
+    await message.answer(text)
 
-    queue = [f for f in REPEAT_FIELD_ORDER if f in selected]
-    await state.update_data(**prefill, repeat_queue=queue)
 
-    await callback.message.edit_text("Davom etilmoqda... ⏳")
+@router.callback_query(F.data == "admin_reminder_setting")
+async def reminder_setting_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    current = await db.get_setting("reminder_hours_before") or "1"
+    await state.set_state(AdminStates.reminder_input)
+    await callback.message.answer(
+        f"⏰ Hozirgi sozlama: imtihondan <b>{current}</b> soat oldin eslatma yuboriladi.\n\n"
+        "Necha soat oldin eslatma yuborilsin? (masalan: 1 yoki 0.5 yoki 2):"
+    )
     await callback.answer()
-    await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
 
 
-@router.callback_query(BookingStates.repeat_branch, F.data.startswith("bookbranch:"))
-async def choose_repeat_branch(callback: CallbackQuery, state: FSMContext):
-    branch = callback.data.split(":", 1)[1]
-    await state.update_data(branch=branch)
-    await callback.message.edit_text(f"Filial: {branch} ✅")
-    await callback.answer()
-    await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
-
-
-@router.message(BookingStates.repeat_exam_date)
-async def get_repeat_exam_date(message: Message, state: FSMContext):
+@router.message(AdminStates.reminder_input)
+async def reminder_setting_process(message: Message, state: FSMContext):
+    await state.clear()
     try:
-        datetime.strptime(message.text.strip(), "%d.%m.%Y")
+        hours = float(message.text.strip().replace(",", "."))
+        if hours <= 0:
+            raise ValueError
     except ValueError:
-        await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
+        await message.answer("Noto'g'ri qiymat. Faqat musbat son kiriting (masalan: 1 yoki 0.5):")
         return
-    await state.update_data(exam_date=message.text.strip())
-    await _advance_repeat_queue(message.answer, message.from_user.id, state)
+    await db.set_setting("reminder_hours_before", str(hours))
+    await message.answer(f"✅ Endi imtihondan {hours} soat oldin eslatma yuboriladi.")
 
 
-@router.message(BookingStates.repeat_exam_time)
-async def get_repeat_exam_time(message: Message, state: FSMContext):
-    try:
-        datetime.strptime(message.text.strip(), "%H:%M")
-    except ValueError:
-        await message.answer("Noto'g'ri format. Masalan: 08:00 shaklida kiriting:")
+@router.callback_query(F.data.startswith("remove_staff:"))
+async def remove_staff_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
         return
-    await state.update_data(exam_time=message.text.strip())
-    await _advance_repeat_queue(message.answer, message.from_user.id, state)
-
-
-@router.callback_query(BookingStates.repeat_test_type, F.data.startswith("booking_type:"))
-async def get_repeat_test_type(callback: CallbackQuery, state: FSMContext):
-    test_type = callback.data.split(":", 1)[1]
-    await state.update_data(test_type=test_type)
-    if test_type == "UNIT TEST":
-        await state.set_state(BookingStates.repeat_unit_name)
-        await callback.message.edit_text("Unit raqamini kiriting (masalan: Unit 7):")
-    else:
-        await state.update_data(test_name=None)
-        await callback.message.edit_text(f"Test turi: {test_type} ✅")
-        await callback.answer()
-        await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
+    user_row_id = int(callback.data.split(":")[1])
+    user = await db.get_user_by_row_id(user_row_id)
+    if not user:
+        await callback.answer("Topilmadi.", show_alert=True)
         return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, o'chirish", callback_data=f"remove_staff_yes:{user_row_id}")
+    builder.button(text="❌ Bekor qilish", callback_data="remove_staff_no")
+    builder.adjust(2)
+    await callback.message.answer(
+        f"<b>{user['full_name']}</b> ni ro'yxatdan o'chirmoqchimisiz?\n"
+        "(U keyinchalik /start bosib qayta ro'yxatdan o'ta oladi)",
+        reply_markup=builder.as_markup(),
+    )
     await callback.answer()
 
 
-@router.message(BookingStates.repeat_unit_name)
-async def get_repeat_unit_name(message: Message, state: FSMContext):
-    await state.update_data(test_name=message.text.strip())
-    await _advance_repeat_queue(message.answer, message.from_user.id, state)
-
-
-@router.message(BookingStates.repeat_students_count)
-async def get_repeat_students_count(message: Message, state: FSMContext):
-    if not message.text.strip().isdigit():
-        await message.answer("Faqat son kiriting:")
+@router.callback_query(F.data.startswith("remove_staff_yes:"))
+async def remove_staff_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
         return
-    await state.update_data(students_count=int(message.text.strip()))
-    await _advance_repeat_queue(message.answer, message.from_user.id, state)
+    user_row_id = int(callback.data.split(":")[1])
+    user = await db.get_user_by_row_id(user_row_id)
+    await db.deactivate_user_by_row_id(user_row_id)
+    await callback.message.edit_text(f"✅ {user['full_name']} ro'yxatdan o'chirildi.")
+    try:
+        await callback.bot.send_message(
+            user["telegram_id"],
+            "Sizning hisobingiz admin tomonidan o'chirildi. Savol uchun admin bilan bog'laning.",
+        )
+    except Exception:
+        pass
+    await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "remove_staff_no")
+async def remove_staff_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cancel_booking:"))
+async def cancel_booking_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    booking_id = int(callback.data.split(":")[1])
+    booking = await db.get_booking(booking_id)
+    if not booking:
+        await callback.answer("Topilmadi.", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, bekor qilish", callback_data=f"cancel_booking_yes:{booking_id}")
+    builder.button(text="◀️ Yo'q", callback_data="cancel_booking_no")
+    builder.adjust(2)
+    await callback.message.answer(
+        f"<b>{booking['teacher_name']}</b> ning {booking['exam_date']} {booking['exam_time']} "
+        f"dagi buyurtmasini bekor qilmoqchimisiz?",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("cancel_booking_yes:"))
+async def cancel_booking_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    booking_id = int(callback.data.split(":")[1])
+    booking = await db.get_booking(booking_id)
+    await db.cancel_booking(booking_id)
+    await callback.message.edit_text("✅ Buyurtma bekor qilindi.")
+
+    try:
+        await callback.bot.send_message(
+            booking["teacher_telegram_id"],
+            f"❌ Sizning {booking['exam_date']} {booking['exam_time']} dagi imtihon "
+            f"buyurtmangiz admin tomonidan bekor qilindi.\n\nSavol uchun admin bilan bog'laning.",
+        )
+    except Exception:
+        pass
+
+    if booking["examiner_telegram_id"]:
+        try:
+            await callback.bot.send_message(
+                booking["examiner_telegram_id"],
+                f"❌ {booking['exam_date']} {booking['exam_time']} dagi imtihon "
+                f"(ustoz: {booking['teacher_name']}) admin tomonidan bekor qilindi.",
+            )
+        except Exception:
+            pass
+
+    await callback.answer("Bekor qilindi")
+
+
+@router.callback_query(F.data == "cancel_booking_no")
+async def cancel_booking_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilinmadi.")
+    await callback.answer()
+
+
+@router.message(Command("admin"))
+async def admin_menu(message: Message):
+    if not await _require_admin(message):
+        return
+    await message.answer("🛠 <b>Admin panel</b>", reply_markup=admin_panel_kb())
