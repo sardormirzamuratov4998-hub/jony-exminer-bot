@@ -10,7 +10,14 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import database as db
 from states import AdminStates
-from keyboards import examiner_approve_kb, admin_panel_kb, branch_manage_kb, branch_delete_confirm_kb
+from keyboards import (
+    examiner_approve_kb,
+    admin_panel_kb,
+    branch_manage_kb,
+    branch_delete_confirm_kb,
+    test_type_manage_kb,
+    test_type_delete_confirm_kb,
+)
 
 router = Router()
 
@@ -372,6 +379,89 @@ async def branch_delete_yes(callback: CallbackQuery):
 
 @router.callback_query(F.data == "branch_del_no")
 async def branch_delete_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
+# ---------- TEST TURLARINI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_test_types")
+async def test_types_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    test_types = await db.get_test_types()
+    text = (
+        "🧪 <b>Test turlari</b>\n\n"
+        + ("\n".join(f"• {t}" for t in test_types) if test_types else "Hozircha test turi yo'q.")
+        + "\n\nO'chirish uchun test turini tanlang yoki yangisini qo'shing:"
+    )
+    await callback.message.answer(text, reply_markup=test_type_manage_kb(test_types))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "testtype_add")
+async def test_type_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.testtype_add_input)
+    await callback.message.answer("Yangi test turi nomini kiriting (masalan: PLACEMENT TEST):")
+    await callback.answer()
+
+
+@router.message(AdminStates.testtype_add_input)
+async def test_type_add_save(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.answer("Test turi nomini kiriting:")
+        return
+    ok = await db.add_test_type(name)
+    await state.clear()
+    if not ok:
+        await message.answer(f"⚠️ \"{name}\" nomli test turi allaqachon mavjud.")
+        return
+    test_types = await db.get_test_types()
+    await message.answer(
+        f"✅ \"{name}\" test turi qo'shildi.",
+        reply_markup=test_type_manage_kb(test_types),
+    )
+
+
+@router.callback_query(F.data.startswith("testtype_del:"))
+async def test_type_delete_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await callback.message.answer(
+        f"<b>{name}</b> test turini o'chirmoqchimisiz?\n\n"
+        "⚠️ Diqqat: bu test turi allaqachon ishlatilgan buyurtmalar tarixiy "
+        "yozuvlarida qoladi, faqat yangi tanlov ro'yxatidan olib tashlanadi.",
+        reply_markup=test_type_delete_confirm_kb(name),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("testtype_del_yes:"))
+async def test_type_delete_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await db.remove_test_type(name)
+    test_types = await db.get_test_types()
+    await callback.message.edit_text(f"✅ \"{name}\" test turi o'chirildi.")
+    await callback.message.answer(
+        "🧪 <b>Test turlari</b>\n\n"
+        + ("\n".join(f"• {t}" for t in test_types) if test_types else "Hozircha test turi yo'q."),
+        reply_markup=test_type_manage_kb(test_types),
+    )
+    await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "testtype_del_no")
+async def test_type_delete_no(callback: CallbackQuery):
     await callback.message.edit_text("Bekor qilindi.")
     await callback.answer()
 
