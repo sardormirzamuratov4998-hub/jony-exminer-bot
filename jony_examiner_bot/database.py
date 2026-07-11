@@ -1,9 +1,20 @@
 import aiosqlite
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 DB_PATH = "jony_bookings.db"
 
 BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
+
+TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
+
+
+def now_tashkent() -> datetime:
+    """Server qayerda joylashgan bo'lishidan qat'iy nazar, doim Toshkent
+    mahalliy vaqtini (naive datetime sifatida) qaytaradi. Buyurtmalardagi
+    sana/vaqt ham foydalanuvchi tomonidan Toshkent vaqtida kiritiladi,
+    shuning uchun taqqoslashlar shu funksiya orqali izchil bo'lishi kerak."""
+    return datetime.now(TASHKENT_TZ).replace(tzinfo=None)
 
 
 async def init_db():
@@ -88,7 +99,7 @@ async def add_admin(telegram_id: int, full_name: str = None, username: str = Non
         await db_.execute(
             "INSERT OR IGNORE INTO admins (telegram_id, full_name, username, added_by, added_at) "
             "VALUES (?,?,?,?,?)",
-            (telegram_id, full_name, username, added_by, datetime.now().isoformat()),
+            (telegram_id, full_name, username, added_by, now_tashkent().isoformat()),
         )
         await db_.commit()
 
@@ -200,7 +211,7 @@ async def reactivate_user_by_row_id(user_row_id: int):
 
 async def get_active_bookings():
     """Faol buyurtmalar — muddati o'tmagan pending/accepted."""
-    today = datetime.now().strftime("%d.%m.%Y")
+    today = now_tashkent().strftime("%d.%m.%Y")
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
         cur = await db_.execute(
@@ -257,7 +268,7 @@ async def create_booking(data: dict) -> int:
                 data["teacher_telegram_id"], data["teacher_name"], data["branch"],
                 data["exam_date"], data["exam_time"], data["test_type"],
                 data.get("test_name"), data["group_name"], data["students_count"],
-                datetime.now().isoformat(),
+                now_tashkent().isoformat(),
             ),
         )
         await db.commit()
@@ -281,7 +292,7 @@ async def accept_booking(booking_id: int, examiner_telegram_id: int, examiner_na
             return False
         await db.execute(
             "UPDATE bookings SET status='accepted', examiner_telegram_id=?, examiner_name=?, accepted_at=? WHERE id=?",
-            (examiner_telegram_id, examiner_name, datetime.now().isoformat(), booking_id),
+            (examiner_telegram_id, examiner_name, now_tashkent().isoformat(), booking_id),
         )
         await db.commit()
         return True
@@ -316,7 +327,7 @@ async def get_notifications(booking_id: int):
 
 
 async def get_pending_bookings_older_than(hours: int):
-    cutoff = datetime.now().timestamp() - hours * 3600
+    cutoff = now_tashkent().timestamp() - hours * 3600
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM bookings WHERE status='pending' AND escalated=0")
@@ -362,7 +373,7 @@ async def cancel_booking(booking_id: int):
 async def expire_past_bookings():
     """Imtihon sanasi+vaqti o'tib ketgan, hali pending/accepted holatidagi
     buyurtmalarni 'expired' deb belgilaydi."""
-    now = datetime.now()
+    now = now_tashkent()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM bookings WHERE status IN ('pending','accepted')")
