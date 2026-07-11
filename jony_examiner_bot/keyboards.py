@@ -202,6 +202,7 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
     builder = ReplyKeyboardBuilder()
     if role == "TEACHER":
         builder.button(text="📅 Imtihon buyurtma qilish")
+        builder.button(text="🔁 avval imtihon topshirgan guruh")
         builder.button(text="📋 Mening buyurtmalarim")
         builder.button(text="➕ Filial qo'shish")
     elif role == "EXAMINER":
@@ -224,6 +225,30 @@ def booking_branch_kb(branches):
     builder = InlineKeyboardBuilder()
     for b in branches:
         builder.button(text=b, callback_data=f"bookbranch:{b}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+REPEAT_FIELD_LABELS = {
+    "branch": "🏢 Filial",
+    "exam_date": "📅 Sana",
+    "exam_time": "🕒 Vaqt",
+    "test_type": "📘 Test turi",
+    "students_count": "👥 O'quvchilar soni",
+}
+REPEAT_FIELD_ORDER = ["branch", "exam_date", "exam_time", "test_type", "students_count"]
+
+
+def repeat_fields_kb(selected: set):
+    """selected = qayta SO'RALADIGAN (belgilangan) maydonlar to'plami; qolganlari avtomatik to'ldiriladi."""
+    builder = InlineKeyboardBuilder()
+    for key in REPEAT_FIELD_ORDER:
+        mark = "☑️" if key in selected else "⬜️"
+        builder.button(
+            text=f"{mark} {REPEAT_FIELD_LABELS[key]}", callback_data=f"repeat_toggle:{key}"
+        )
+    builder.button(text="▶️ Davom etish", callback_data="repeat_start")
+    builder.button(text="❌ Bekor qilish", callback_data="repeat_cancel")
     builder.adjust(1)
     return builder.as_markup()
 
