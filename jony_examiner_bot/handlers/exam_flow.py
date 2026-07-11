@@ -17,6 +17,7 @@ from keyboards import (
     manage_group_kb,
     edit_list_kb,
     edit_action_kb,
+    accept_booking_kb,
 )
 from excel_export import build_excel
 
@@ -130,6 +131,44 @@ async def my_schedule(message: Message):
             f"Turi: {test_info}\nO'quvchilar soni: {b['students_count']}"
         )
     await message.answer("\n".join(lines))
+
+
+# ---------- KUTILAYOTGAN BUYURTMALAR (o'tkazib yuborilgan / hali qabul qilinmagan) ----------
+
+@router.message(F.text == "🕓 Kutilayotgan buyurtmalar")
+async def pending_orders(message: Message):
+    user = await db.get_user(message.from_user.id)
+    if not user or user["role"] != "EXAMINER" or user["status"] not in ("active", "approved"):
+        await message.answer("Bu funksiya faqat tasdiqlangan Examinerlar uchun.")
+        return
+
+    bookings = await db.get_pending_bookings_by_branch(user["branch"])
+    if not bookings:
+        await message.answer("Hozircha kutilayotgan (qabul qilinmagan) buyurtmalar yo'q.")
+        return
+
+    await message.answer(
+        f"🕓 <b>{user['branch']}</b> filiali bo'yicha kutilayotgan buyurtmalar ({len(bookings)} ta):"
+    )
+    for b in bookings:
+        test_info = b["test_type"]
+        if b.get("test_name"):
+            test_info += f" ({b['test_name']})"
+        text = (
+            f"🔔 <b>Imtihon buyurtmasi</b>\n\n"
+            f"Ustoz: {b['teacher_name']}\n"
+            f"Filial: {b['branch']}\n"
+            f"Sana: {b['exam_date']}\n"
+            f"Vaqt: {b['exam_time']}\n"
+            f"Test turi: {test_info}\n"
+            f"Guruh: {b['group_name']}\n"
+            f"O'quvchilar soni: {b['students_count']}"
+        )
+        try:
+            sent = await message.answer(text, reply_markup=accept_booking_kb(b["id"]))
+            await db.add_notification(b["id"], sent.chat.id, sent.message_id)
+        except Exception:
+            pass
 
 
 # ---------- HEADER MA'LUMOTLARI ----------
