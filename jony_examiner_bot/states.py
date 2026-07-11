@@ -60,7 +60,6 @@ class BookingStates(StatesGroup):
     exam_time = State()
     test_type = State()
     unit_name = State()
-    midterm_choice = State()
     group_name = State()
     students_count = State()
     confirm = State()
@@ -73,7 +72,6 @@ class BookingStates(StatesGroup):
     repeat_exam_time = State()
     repeat_test_type = State()
     repeat_unit_name = State()
-    repeat_midterm_choice = State()
     repeat_students_count = State()
 
 
@@ -81,3 +79,4 @@ class AdminStates(StatesGroup):
     search_query = State()
     reminder_input = State()
     branch_add_input = State()
+    testtype_add_input = State()
