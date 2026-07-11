@@ -116,7 +116,8 @@ async def choose_role(callback: CallbackQuery, state: FSMContext):
 async def get_full_name(message: Message, state: FSMContext):
     await state.update_data(full_name=message.text)
     await state.set_state(RegStates.choose_branch)
-    await message.answer("Filialingizni tanlang:", reply_markup=branch_kb())
+    branches = await db.get_branches()
+    await message.answer("Filialingizni tanlang:", reply_markup=branch_kb(branches))
 
 
 @router.callback_query(RegStates.choose_branch, F.data.startswith("branch:"))
@@ -171,13 +172,13 @@ async def add_branch_start(message: Message):
     if not user or user["role"] != "TEACHER":
         return
     existing = await db.get_teacher_branches(message.from_user.id)
-    from keyboards import BRANCHES
-    if len(existing) >= len(BRANCHES):
+    all_branches = await db.get_branches()
+    if len(existing) >= len(all_branches):
         await message.answer("Siz allaqachon barcha filiallarga qo'shilgansiz.")
         return
     await message.answer(
         "Qaysi filialni qo'shmoqchisiz?",
-        reply_markup=branch_kb(prefix="addbranch", exclude=existing),
+        reply_markup=branch_kb(all_branches, prefix="addbranch", exclude=existing),
     )
 
 
