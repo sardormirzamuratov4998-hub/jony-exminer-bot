@@ -128,6 +128,7 @@ def role_choice_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="👩‍🏫 Men Ustozman", callback_data="role:TEACHER")
     builder.button(text="🧑‍💼 Men Examinerman", callback_data="role:EXAMINER")
+    builder.button(text="🏫 O'quv bo'lim rahbariman", callback_data="role:STUDY_HEAD")
     builder.button(text="🛠 Adminman", callback_data="role:ADMIN")
     builder.adjust(1)
     return builder.as_markup()
@@ -200,6 +201,8 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
     elif role == "EXAMINER":
         builder.button(text="🆕 Test kiritish")
         builder.button(text="📅 Mening imtihonlarim")
+    elif role == "STUDY_HEAD":
+        builder.button(text="ℹ️ Yordam")
     if is_admin:
         builder.button(text="🛠 Admin panel")
     builder.adjust(1)
@@ -258,6 +261,8 @@ def admin_panel_kb():
     builder.button(text="📝 Buyurtma maydonlari", callback_data="admin_booking_fields")
     builder.button(text="🛡 Adminlar ro'yxati", callback_data="admin_admins")
     builder.button(text="➕ Admin qo'shish", callback_data="admin_add")
+    builder.button(text="🏫 O'quv bo'lim rahbari ruxsatlari", callback_data="admin_study_heads")
+    builder.button(text="➕ O'quv bo'lim rahbari qo'shish", callback_data="admin_add_study_head")
     builder.button(text="📊 Kunlik hisobot (hozir)", callback_data="admin_daily_report")
     builder.button(text="📥 Bazani hoziroq yuklab olish", callback_data="admin_backup")
     builder.button(text="⏰ Eslatma vaqti", callback_data="admin_reminder_setting")
