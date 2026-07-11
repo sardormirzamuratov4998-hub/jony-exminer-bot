@@ -62,6 +62,7 @@ class BookingStates(StatesGroup):
     unit_name = State()
     group_name = State()
     students_count = State()
+    custom_field_input = State()
     confirm = State()
 
     # OXIRGI BUYURTMANI TAKRORLASH (avval imtihon topshirgan guruh)
@@ -80,3 +81,5 @@ class AdminStates(StatesGroup):
     reminder_input = State()
     branch_add_input = State()
     testtype_add_input = State()
+    grading_input = State()
+    booking_field_add_input = State()
