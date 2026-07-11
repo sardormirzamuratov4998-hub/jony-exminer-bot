@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 DB_PATH = "jony_bookings.db"
 
-BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
+DEFAULT_BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
 
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 
@@ -110,7 +110,25 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS branches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+        """)
         await db.commit()
+
+        cur = await db.execute("SELECT COUNT(*) FROM branches")
+        (count,) = await cur.fetchone()
+        if count == 0:
+            now_iso = now_tashkent().isoformat()
+            for name in DEFAULT_BRANCHES:
+                await db.execute(
+                    "INSERT OR IGNORE INTO branches (name, created_at) VALUES (?,?)",
+                    (name, now_iso),
+                )
+            await db.commit()
 
 
 # ---------- ADMINS ----------
@@ -272,6 +290,38 @@ async def get_examiners_by_branch(branch: str, status: str = "active"):
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------- FILIALLAR (BRANCHES) ----------
+
+async def get_branches() -> list:
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute("SELECT name FROM branches ORDER BY name")
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
+async def add_branch(name: str) -> bool:
+    """Yangi filial qo'shadi. Agar shu nomdagi filial allaqachon bo'lsa, False qaytaradi."""
+    name = name.strip()
+    if not name:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db_:
+        try:
+            await db_.execute(
+                "INSERT INTO branches (name, created_at) VALUES (?,?)",
+                (name, now_tashkent().isoformat()),
+            )
+            await db_.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+
+async def remove_branch(name: str):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("DELETE FROM branches WHERE name=?", (name,))
+        await db_.commit()
 
 
 # ---------- TEACHER BRANCHES (bir nechta filialda ishlash) ----------
