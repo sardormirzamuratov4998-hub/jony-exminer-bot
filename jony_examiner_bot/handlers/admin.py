@@ -1,15 +1,16 @@
+import os
 from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import database as db
 from states import AdminStates
-from keyboards import examiner_approve_kb, admin_panel_kb
+from keyboards import examiner_approve_kb, admin_panel_kb, branch_manage_kb, branch_delete_confirm_kb
 
 router = Router()
 
@@ -292,6 +293,89 @@ async def staff_list_cb(callback: CallbackQuery):
     await callback.answer()
 
 
+# ---------- FILIALLARNI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_branches")
+async def branches_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    branches = await db.get_branches()
+    text = (
+        "🏢 <b>Filiallar</b>\n\n"
+        + ("\n".join(f"• {b}" for b in branches) if branches else "Hozircha filial yo'q.")
+        + "\n\nO'chirish uchun filialni tanlang yoki yangi filial qo'shing:"
+    )
+    await callback.message.answer(text, reply_markup=branch_manage_kb(branches))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "branch_add")
+async def branch_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.branch_add_input)
+    await callback.message.answer("Yangi filial nomini kiriting (masalan: Chilonzor):")
+    await callback.answer()
+
+
+@router.message(AdminStates.branch_add_input)
+async def branch_add_save(message: Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.answer("Filial nomini kiriting:")
+        return
+    ok = await db.add_branch(name)
+    await state.clear()
+    if not ok:
+        await message.answer(f"⚠️ \"{name}\" nomli filial allaqachon mavjud.")
+        return
+    branches = await db.get_branches()
+    await message.answer(
+        f"✅ \"{name}\" filiali qo'shildi.",
+        reply_markup=branch_manage_kb(branches),
+    )
+
+
+@router.callback_query(F.data.startswith("branch_del:"))
+async def branch_delete_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await callback.message.answer(
+        f"<b>{name}</b> filialini o'chirmoqchimisiz?\n\n"
+        "⚠️ Diqqat: bu filial nomi allaqachon ishlatilgan foydalanuvchilar/buyurtmalar "
+        "tarixiy yozuvlarida qoladi, faqat yangi tanlov ro'yxatidan olib tashlanadi.",
+        reply_markup=branch_delete_confirm_kb(name),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("branch_del_yes:"))
+async def branch_delete_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    name = callback.data.split(":", 1)[1]
+    await db.remove_branch(name)
+    branches = await db.get_branches()
+    await callback.message.edit_text(f"✅ \"{name}\" filiali o'chirildi.")
+    await callback.message.answer(
+        "🏢 <b>Filiallar</b>\n\n"
+        + ("\n".join(f"• {b}" for b in branches) if branches else "Hozircha filial yo'q."),
+        reply_markup=branch_manage_kb(branches),
+    )
+    await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "branch_del_no")
+async def branch_delete_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
 @router.message(Command("daily_report"))
 async def daily_report_cmd(message: Message):
     if not await _require_admin(message):
@@ -305,6 +389,39 @@ async def daily_report_cb(callback: CallbackQuery):
         await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
         return
     await _send_daily_report(callback.message.answer)
+    await callback.answer()
+
+
+def _build_backup_document():
+    if not os.path.exists(db.DB_PATH):
+        return None, None
+    date_str = db.now_tashkent().strftime("%d.%m.%Y %H:%M")
+    document = FSInputFile(db.DB_PATH, filename=f"backup_{db.now_tashkent().strftime('%Y%m%d_%H%M')}.db")
+    caption = f"🗄 Bazaning zaxira nusxasi — {date_str}"
+    return document, caption
+
+
+@router.message(Command("backup"))
+async def backup_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    document, caption = _build_backup_document()
+    if not document:
+        await message.answer("Baza fayli topilmadi.")
+        return
+    await message.answer_document(document, caption=caption)
+
+
+@router.callback_query(F.data == "admin_backup")
+async def backup_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    document, caption = _build_backup_document()
+    if not document:
+        await callback.answer("Baza fayli topilmadi.", show_alert=True)
+        return
+    await callback.message.answer_document(document, caption=caption)
     await callback.answer()
 
 
