@@ -17,6 +17,10 @@ from keyboards import (
     branch_delete_confirm_kb,
     test_type_manage_kb,
     test_type_delete_confirm_kb,
+    grading_thresholds_kb,
+    GRADING_LABELS,
+    booking_field_manage_kb,
+    booking_field_delete_confirm_kb,
 )
 
 router = Router()
@@ -462,6 +466,155 @@ async def test_type_delete_yes(callback: CallbackQuery):
 
 @router.callback_query(F.data == "testtype_del_no")
 async def test_type_delete_no(callback: CallbackQuery):
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.answer()
+
+
+# ---------- BAHOLASH CHEGARALARINI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_grading")
+async def grading_thresholds_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    thresholds = await db.get_grading_thresholds()
+    await callback.message.answer(
+        "🎯 <b>Baholash chegaralari</b>\n\n"
+        "O'zgartirmoqchi bo'lgan chegarani tanlang (foizda, shu qiymatdan boshlab "
+        "shu daraja qo'yiladi):",
+        reply_markup=grading_thresholds_kb(thresholds),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("grading_edit:"))
+async def grading_edit_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    key = callback.data.split(":", 1)[1]
+    if key not in GRADING_LABELS:
+        await callback.answer("Noma'lum chegara.", show_alert=True)
+        return
+    thresholds = await db.get_grading_thresholds()
+    await state.set_state(AdminStates.grading_input)
+    await state.update_data(grading_key=key)
+    await callback.message.answer(
+        f"{GRADING_LABELS[key]}\nHozirgi qiymat: <b>{thresholds[key]}%</b>\n\n"
+        "Yangi qiymatni foizda kiriting (masalan: 90):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.grading_input)
+async def grading_edit_save(message: Message, state: FSMContext):
+    data = await state.get_data()
+    key = data.get("grading_key")
+    if key not in GRADING_LABELS:
+        await state.clear()
+        await message.answer("Xatolik yuz berdi, qaytadan urinib ko'ring.")
+        return
+    try:
+        value = float(message.text.strip().replace(",", "."))
+        if not (0 <= value <= 100):
+            raise ValueError
+    except ValueError:
+        await message.answer("Noto'g'ri qiymat. 0 dan 100 gacha son kiriting (masalan: 90):")
+        return
+    await db.set_grading_threshold(key, value)
+    await state.clear()
+    thresholds = await db.get_grading_thresholds()
+    await message.answer(
+        f"✅ {GRADING_LABELS[key]} endi: <b>{value}%</b>",
+        reply_markup=grading_thresholds_kb(thresholds),
+    )
+
+
+# ---------- BUYURTMA QO'SHIMCHA MAYDONLARINI BOSHQARISH ----------
+
+@router.callback_query(F.data == "admin_booking_fields")
+async def booking_fields_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    fields = await db.get_booking_fields()
+    text = (
+        "📝 <b>Buyurtma maydonlari</b>\n\n"
+        + ("\n".join(f"• {f['label']}" for f in fields) if fields else "Hozircha qo'shimcha maydon yo'q.")
+        + "\n\nBular — ustoz imtihon buyurtma qilayotganda standart maydonlardan (filial, "
+        "sana, vaqt, test turi, guruh, o'quvchilar soni) tashqari qo'shimcha so'raladigan "
+        "maydonlar.\n\nO'chirish uchun tanlang yoki yangisini qo'shing:"
+    )
+    await callback.message.answer(text, reply_markup=booking_field_manage_kb(fields))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "bookfield_add")
+async def booking_field_add_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.booking_field_add_input)
+    await callback.message.answer(
+        "Yangi maydon nomini kiriting (masalan: Sinf raqami, Telefon raqami):"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.booking_field_add_input)
+async def booking_field_add_save(message: Message, state: FSMContext):
+    label = message.text.strip()
+    if not label:
+        await message.answer("Maydon nomini kiriting:")
+        return
+    ok = await db.add_booking_field(label)
+    await state.clear()
+    if not ok:
+        await message.answer(f"⚠️ \"{label}\" nomli maydon allaqachon mavjud.")
+        return
+    fields = await db.get_booking_fields()
+    await message.answer(
+        f"✅ \"{label}\" maydoni qo'shildi. Endi ustozlar buyurtma berayotganda shu maydon ham so'raladi.",
+        reply_markup=booking_field_manage_kb(fields),
+    )
+
+
+@router.callback_query(F.data.startswith("bookfield_del:"))
+async def booking_field_delete_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    field_key = callback.data.split(":", 1)[1]
+    fields = {f["field_key"]: f["label"] for f in await db.get_booking_fields()}
+    label = fields.get(field_key, field_key)
+    await callback.message.answer(
+        f"<b>{label}</b> maydonini o'chirmoqchimisiz?\n\n"
+        "⚠️ Diqqat: bu maydon bo'yicha eski buyurtmalarda kiritilgan javoblar tarixiy "
+        "yozuvlarda qoladi, faqat yangi buyurtmalarda endi so'ralmaydi.",
+        reply_markup=booking_field_delete_confirm_kb(field_key),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("bookfield_del_yes:"))
+async def booking_field_delete_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    field_key = callback.data.split(":", 1)[1]
+    await db.remove_booking_field(field_key)
+    fields = await db.get_booking_fields()
+    await callback.message.edit_text("✅ Maydon o'chirildi.")
+    await callback.message.answer(
+        "📝 <b>Buyurtma maydonlari</b>\n\n"
+        + ("\n".join(f"• {f['label']}" for f in fields) if fields else "Hozircha qo'shimcha maydon yo'q."),
+        reply_markup=booking_field_manage_kb(fields),
+    )
+    await callback.answer("O'chirildi")
+
+
+@router.callback_query(F.data == "bookfield_del_no")
+async def booking_field_delete_no(callback: CallbackQuery):
     await callback.message.edit_text("Bekor qilindi.")
     await callback.answer()
 
