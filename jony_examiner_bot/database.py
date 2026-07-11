@@ -735,6 +735,18 @@ async def cancel_booking(booking_id: int):
         await db.commit()
 
 
+async def reschedule_booking(booking_id: int, exam_date: str, exam_time: str):
+    """Buyurtma sanasi/vaqtini o'zgartiradi va eslatma bayroqlarini qayta tiklaydi
+    (shunda eslatmalar yangi vaqtga nisbatan to'g'ri ishlaydi)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE bookings SET exam_date=?, exam_time=?,
+               reminder_1h_sent=0, reminder_time_sent=0, escalated=0 WHERE id=?""",
+            (exam_date, exam_time, booking_id),
+        )
+        await db.commit()
+
+
 async def expire_past_bookings():
     """Imtihon sanasi+vaqti o'tib ketgan, hali pending/accepted holatidagi
     buyurtmalarni 'expired' deb belgilaydi."""
