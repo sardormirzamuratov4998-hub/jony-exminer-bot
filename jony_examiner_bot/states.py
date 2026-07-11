@@ -80,3 +80,4 @@ class BookingStates(StatesGroup):
 class AdminStates(StatesGroup):
     search_query = State()
     reminder_input = State()
+    branch_add_input = State()
