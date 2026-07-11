@@ -36,6 +36,14 @@ async def send_menu_for_user(message: Message, user: dict):
             "(Rolni o'zgartirish: /change_role)",
             reply_markup=build_main_menu_kb("EXAMINER", is_adm),
         )
+    elif user["role"] == "STUDY_HEAD":
+        await message.answer(
+            f"Xush kelibsiz, {user['full_name']}! (O'quv bo'lim rahbari)\n\n"
+            "END OF COURSE va MIDTERM turidagi buyurtmalar hamda natijalar (Excel) "
+            "filialdan qat'iy nazar shu yerga avtomatik yuboriladi.\n"
+            "(Rolni o'zgartirish: /change_role)",
+            reply_markup=build_main_menu_kb("STUDY_HEAD", is_adm),
+        )
 
 
 @router.message(CommandStart())
@@ -106,6 +114,16 @@ async def choose_role(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
+    if role == "STUDY_HEAD":
+        if not await db.is_study_head_allowed(callback.from_user.id):
+            await state.clear()
+            await callback.message.edit_text(
+                "Bu lavozimni olish uchun sizga hali admin ruxsat bermagan. "
+                "Admin bilan bog'laning."
+            )
+            await callback.answer()
+            return
+
     await state.update_data(role=role)
     await state.set_state(RegStates.full_name)
     await callback.message.edit_text("Ism va familiyangizni kiriting:")
@@ -115,6 +133,23 @@ async def choose_role(callback: CallbackQuery, state: FSMContext):
 @router.message(RegStates.full_name)
 async def get_full_name(message: Message, state: FSMContext):
     await state.update_data(full_name=message.text)
+    data = await state.get_data()
+
+    if data["role"] == "STUDY_HEAD":
+        telegram_id = message.from_user.id
+        username = message.from_user.username
+        full_name = message.text
+        await db.upsert_user(telegram_id, "STUDY_HEAD", full_name, "Barcha filiallar", "active", username)
+        await state.clear()
+        is_adm = await db.is_admin(telegram_id)
+        await message.answer(
+            f"Ro'yxatdan o'tdingiz ✅\nLavozim: O'quv bo'lim rahbari\n\n"
+            "Endi END OF COURSE va MIDTERM buyurtmalari hamda natijalari (Excel) "
+            "filialdan qat'iy nazar sizga avtomatik yuboriladi.",
+            reply_markup=build_main_menu_kb("STUDY_HEAD", is_adm),
+        )
+        return
+
     await state.set_state(RegStates.choose_branch)
     branches = await db.get_branches()
     await message.answer("Filialingizni tanlang:", reply_markup=branch_kb(branches))
@@ -179,6 +214,19 @@ async def add_branch_start(message: Message):
     await message.answer(
         "Qaysi filialni qo'shmoqchisiz?",
         reply_markup=branch_kb(all_branches, prefix="addbranch", exclude=existing),
+    )
+
+
+@router.message(F.text == "ℹ️ Yordam")
+async def study_head_help(message: Message):
+    user = await db.get_user(message.from_user.id)
+    if not user or user["role"] != "STUDY_HEAD":
+        return
+    await message.answer(
+        "Siz <b>O'quv bo'lim rahbari</b> sifatida ro'yxatdan o'tgansiz.\n\n"
+        "END OF COURSE va MIDTERM turidagi barcha buyurtmalar, hamda examinerlar "
+        "tomonidan yuborilgan shu turdagi natijalar (Excel) filialdan qat'iy nazar "
+        "avtomatik ravishda shu yerga yuboriladi."
     )
 
 
