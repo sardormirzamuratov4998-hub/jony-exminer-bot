@@ -65,6 +65,17 @@ class BookingStates(StatesGroup):
     students_count = State()
     confirm = State()
 
+    # OXIRGI BUYURTMANI TAKRORLASH (avval imtihon topshirgan guruh)
+    repeat_group_name = State()
+    repeat_fields_select = State()
+    repeat_branch = State()
+    repeat_exam_date = State()
+    repeat_exam_time = State()
+    repeat_test_type = State()
+    repeat_unit_name = State()
+    repeat_midterm_choice = State()
+    repeat_students_count = State()
+
 
 class AdminStates(StatesGroup):
     search_query = State()
