@@ -59,10 +59,18 @@ def _cell(ws, row, col, value, bold=False, fill=None, align="center", size=11, f
 
 
 def _merge_bordered(ws, row, col1, col2, fill=None):
-    """Katakchalarni birlashtiradi. Excel/LibreOffice birlashtirilgan katakcha
-    uchun faqat chap-yuqori (anchor) katakcha stilini ishlatadi, shuning uchun
-    faqat shu katakchaga chegara/fon berish yetarli."""
+    """Katakchalarni birlashtiradi va CHEGARA/FONNI diapazondagi HAR BIR
+    katakchaga qo'yadi. Faqat anchor (chap-yuqori) katakchaga chegara berish
+    yetarli emas — birlashtirilgan blokning o'ng/pastki chetidagi chegara
+    chizig'i chala chiqib qolardi (aynan shu narsa oldingi versiyada
+    "chegaralar chala" muammosiga sabab bo'lgan). Shu bois range ichidagi
+    barcha katakchalarga bir xil border+fill beriladi."""
     ws.merge_cells(start_row=row, start_column=col1, end_row=row, end_column=col2)
+    for col in range(col1, col2 + 1):
+        c = ws.cell(row=row, column=col)
+        c.border = BORDER
+        if fill:
+            c.fill = PatternFill(start_color=fill, end_color=fill, fill_type="solid")
 
 
 def build_excel(data: dict, filepath: str):
@@ -110,27 +118,30 @@ def build_excel(data: dict, filepath: str):
         r += 1
 
     # Test type / section header row
+    test_type_row = r
+    ws.row_dimensions[test_type_row].height = 22  # "MIDTERM"/"END OF COURSE" kabi uzun
+    # nomlar endi keng ustunga sig'gani uchun harf-harflab bo'linib qolmaydi.
     if is_unit:
-        _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
-        _merge_bordered(ws, r, 2, 3, fill=ORANGE)
-        _cell(ws, r, 2, data["level_name"], bold=True, fill=ORANGE)
-        _merge_bordered(ws, r, 4, n_cols, fill=ORANGE)
-        _cell(ws, r, 4, str(data["max_score"]), bold=True, fill=ORANGE)
+        _cell(ws, r, 1, data["test_name"], bold=True)
+        _merge_bordered(ws, r, 2, 3)
+        _cell(ws, r, 2, data["level_name"], bold=True)
+        _merge_bordered(ws, r, 4, n_cols)
+        _cell(ws, r, 4, str(data["max_score"]), bold=True)
         r += 1
 
         headers = ["#", "SURNAME", "NAME", "TOTAL", "PERCENT", "STATUS"]
     else:
         sec = data["sections"]
-        _cell(ws, r, 1, data["test_name"], bold=True, fill=ORANGE)
-        _merge_bordered(ws, r, 2, 3, fill=ORANGE)
-        _cell(ws, r, 2, data["level_name"], bold=True, fill=ORANGE)
-        _cell(ws, r, 4, sec["listening"], bold=True, fill=ORANGE)
-        _cell(ws, r, 5, sec["reading"], bold=True, fill=ORANGE)
-        _cell(ws, r, 6, sec["writing"], bold=True, fill=ORANGE)
-        _cell(ws, r, 7, sec["speaking"], bold=True, fill=ORANGE)
+        _cell(ws, r, 1, data["test_name"], bold=True)
+        _merge_bordered(ws, r, 2, 3)
+        _cell(ws, r, 2, data["level_name"], bold=True)
+        _cell(ws, r, 4, sec["listening"], bold=True)
+        _cell(ws, r, 5, sec["reading"], bold=True)
+        _cell(ws, r, 6, sec["writing"], bold=True)
+        _cell(ws, r, 7, sec["speaking"], bold=True)
         total_max = sum(sec.values())
-        _merge_bordered(ws, r, 8, 9, fill=ORANGE)
-        _cell(ws, r, 8, total_max, bold=True, fill=ORANGE)
+        _merge_bordered(ws, r, 8, 9)
+        _cell(ws, r, 8, total_max, bold=True)
         r += 1
 
         headers = ["#", "SURNAME", "NAME", "LISTENING", "READING", "WRITING", "SPEAKING", "TOTAL", "STATUS"]
@@ -216,7 +227,10 @@ def build_excel(data: dict, filepath: str):
     r += 1
 
     # Column widths
-    widths = [4, 18, 16, 11, 11, 11, 11, 9, 11] if not is_unit else [4, 18, 16, 9, 10, 11]
+    # 1-ustun avval faqat "#" uchun 4 belgi qilib qo'yilgan edi — shu sabab
+    # "MIDTERM" / "END OF COURSE" kabi test nomlari sig'may, harf-harflab
+    # pastga bo'linib ketardi. Endi kengroq (10) qilindi.
+    widths = [10, 18, 16, 11, 11, 11, 11, 9, 11] if not is_unit else [10, 18, 16, 9, 10, 11]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
