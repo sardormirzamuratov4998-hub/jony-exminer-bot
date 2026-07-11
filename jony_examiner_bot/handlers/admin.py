@@ -30,6 +30,10 @@ class AddAdminStates(StatesGroup):
     waiting_input = State()
 
 
+class AddStudyHeadStates(StatesGroup):
+    waiting_input = State()
+
+
 async def _require_admin(message: Message) -> bool:
     if not await db.is_admin(message.from_user.id):
         await message.answer("Bu komanda faqat adminlar uchun.")
@@ -85,7 +89,12 @@ async def _send_staff(send):
         lines = [f"📍 <b>{branch}</b>\n"]
         builder = InlineKeyboardBuilder()
         for u in users:
-            role_label = "👩‍🏫 Ustoz" if u["role"] == "TEACHER" else "🧑‍💼 Examiner"
+            role_labels = {
+                "TEACHER": "👩‍🏫 Ustoz",
+                "EXAMINER": "🧑‍💼 Examiner",
+                "STUDY_HEAD": "🏫 O'quv bo'lim rahbari",
+            }
+            role_label = role_labels.get(u["role"], u["role"])
             status_label = {
                 "active": "", "approved": "", "pending": " (kutilmoqda)", "rejected": " (rad etilgan)",
             }.get(u["status"], "")
@@ -102,6 +111,19 @@ async def _send_admins(send):
         return
     lines = ["👤 <b>Adminlar ro'yxati:</b>\n"]
     for a in admins:
+        name = a["full_name"] or "Noma'lum"
+        uname = f"@{a['username']}" if a["username"] else ""
+        lines.append(f"• {name} {uname} — ID: {a['telegram_id']}")
+    await send("\n".join(lines))
+
+
+async def _send_study_heads(send):
+    allowed = await db.list_study_head_allowed()
+    if not allowed:
+        await send("Hozircha O'quv bo'lim rahbari lavozimi uchun ruxsat berilgan odam yo'q.")
+        return
+    lines = ["🏫 <b>O'quv bo'lim rahbari — ruxsat berilganlar:</b>\n"]
+    for a in allowed:
         name = a["full_name"] or "Noma'lum"
         uname = f"@{a['username']}" if a["username"] else ""
         lines.append(f"• {name} {uname} — ID: {a['telegram_id']}")
@@ -253,6 +275,92 @@ async def list_admins_cb(callback: CallbackQuery):
         await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
         return
     await _send_admins(callback.message.answer)
+    await callback.answer()
+
+
+@router.message(Command("add_study_head"))
+async def add_study_head_start(message: Message, state: FSMContext):
+    if not await _require_admin(message):
+        return
+    await state.set_state(AddStudyHeadStates.waiting_input)
+    await message.answer(
+        "O'quv bo'lim rahbari lavozimini olishga ruxsat berilayotgan odamning "
+        "Telegram ID sini yuboring,\nyoki undan (yoki u yuborgan istalgan xabarni) forward qiling."
+    )
+
+
+@router.callback_query(F.data == "admin_add_study_head")
+async def add_study_head_start_cb(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AddStudyHeadStates.waiting_input)
+    await callback.message.answer(
+        "O'quv bo'lim rahbari lavozimini olishga ruxsat berilayotgan odamning "
+        "Telegram ID sini yuboring,\nyoki undan (yoki u yuborgan istalgan xabarni) forward qiling."
+    )
+    await callback.answer()
+
+
+@router.message(AddStudyHeadStates.waiting_input)
+async def add_study_head_process(message: Message, state: FSMContext):
+    await state.clear()
+    target_id = None
+    target_name = None
+    target_username = None
+
+    if message.forward_from:
+        target_id = message.forward_from.id
+        target_name = message.forward_from.full_name
+        target_username = message.forward_from.username
+    elif message.text and message.text.strip().isdigit():
+        target_id = int(message.text.strip())
+    else:
+        await message.answer(
+            "Tushunmadim. Telegram ID (faqat raqam) yuboring yoki xabarni forward qiling."
+        )
+        return
+
+    await db.add_study_head_allowed(target_id, target_name, target_username, added_by=message.from_user.id)
+    await message.answer(
+        f"✅ {target_name or target_id} uchun O'quv bo'lim rahbari lavozimini olish ruxsati berildi."
+    )
+    try:
+        await message.bot.send_message(
+            target_id,
+            "Sizga <b>O'quv bo'lim rahbari</b> lavozimini olish uchun admin ruxsat berdi.\n"
+            "Endi /start (yoki /change_role) bosib, shu lavozimni tanlashingiz mumkin.",
+        )
+    except Exception:
+        pass
+
+
+@router.message(Command("remove_study_head"))
+async def remove_study_head_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        await message.answer("Foydalanish: /remove_study_head <telegram_id>")
+        return
+    target_id = int(parts[1])
+    await db.remove_study_head_allowed(target_id)
+    await message.answer(f"✅ {target_id} uchun O'quv bo'lim rahbari ruxsati olib tashlandi.")
+
+
+@router.message(Command("study_heads"))
+async def list_study_heads_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_study_heads(message.answer)
+
+
+@router.callback_query(F.data == "admin_study_heads")
+async def list_study_heads_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_study_heads(callback.message.answer)
     await callback.answer()
 
 
