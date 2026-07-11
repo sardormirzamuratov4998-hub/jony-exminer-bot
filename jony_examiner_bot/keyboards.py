@@ -181,6 +181,7 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
     builder = ReplyKeyboardBuilder()
     if role == "TEACHER":
         builder.button(text="📅 Imtihon buyurtma qilish")
+        builder.button(text="📋 Mening buyurtmalarim")
         builder.button(text="➕ Filial qo'shish")
     elif role == "EXAMINER":
         builder.button(text="🆕 Test kiritish")
