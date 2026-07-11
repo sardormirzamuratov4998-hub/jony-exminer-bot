@@ -124,9 +124,6 @@ def cancel_kb():
 
 # ---------- ROLE / BOOKING KEYBOARDS ----------
 
-BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
-
-
 def role_choice_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="👩‍🏫 Men Ustozman", callback_data="role:TEACHER")
@@ -136,10 +133,10 @@ def role_choice_kb():
     return builder.as_markup()
 
 
-def branch_kb(prefix="branch", exclude=None):
+def branch_kb(branches, prefix="branch", exclude=None):
     exclude = exclude or []
     builder = InlineKeyboardBuilder()
-    for b in BRANCHES:
+    for b in branches:
         if b in exclude:
             continue
         builder.button(text=b, callback_data=f"{prefix}:{b}")
@@ -238,10 +235,29 @@ def admin_panel_kb():
     builder.button(text="🔍 Qidiruv", callback_data="admin_search")
     builder.button(text="📈 Statistika (30 kun)", callback_data="admin_stats")
     builder.button(text="👤 Xodimlar (o'chirish)", callback_data="admin_staff")
+    builder.button(text="🏢 Filiallarni boshqarish", callback_data="admin_branches")
     builder.button(text="🛡 Adminlar ro'yxati", callback_data="admin_admins")
     builder.button(text="➕ Admin qo'shish", callback_data="admin_add")
     builder.button(text="📊 Kunlik hisobot (hozir)", callback_data="admin_daily_report")
+    builder.button(text="📥 Bazani hoziroq yuklab olish", callback_data="admin_backup")
     builder.button(text="⏰ Eslatma vaqti", callback_data="admin_reminder_setting")
     builder.button(text="ℹ️ Admin guruh sozlash", callback_data="admin_group_info")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def branch_manage_kb(branches):
+    builder = InlineKeyboardBuilder()
+    for b in branches:
+        builder.button(text=f"🗑 {b}", callback_data=f"branch_del:{b}")
+    builder.button(text="➕ Yangi filial qo'shish", callback_data="branch_add")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def branch_delete_confirm_kb(name: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, o'chirish", callback_data=f"branch_del_yes:{name}")
+    builder.button(text="❌ Bekor qilish", callback_data="branch_del_no")
+    builder.adjust(2)
     return builder.as_markup()
