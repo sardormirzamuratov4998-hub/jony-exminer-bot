@@ -27,6 +27,22 @@ def now_tashkent() -> datetime:
     return datetime.now(TASHKENT_TZ).replace(tzinfo=None)
 
 
+async def _ensure_column(db_, table: str, column: str, coldef: str):
+    """Eski (tiklangan) baza fayllarida yangi qo'shilgan ustun bo'lmasligi mumkin —
+    shuni avtomatik, mavjud ma'lumotni O'CHIRMASDAN qo'shib qo'yadi.
+
+    MUHIM: bundan keyin biror jadvalga yangi ustun qo'shilsa, faqat CREATE TABLE
+    qatoriga yozish YETARLI EMAS (u eski jadvalga ta'sir qilmaydi) — shu funksiya
+    orqali ham qo'shilishi kerak, masalan:
+        await _ensure_column(db, "users", "phone_number", "TEXT")
+    Shunda eski .db faylni tiklagandan keyin ham bot xatosiz ishlayveradi.
+    """
+    cur = await db_.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in await cur.fetchall()}
+    if column not in existing:
+        await db_.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
+
+
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -159,6 +175,12 @@ async def init_db():
                 UNIQUE(booking_id, field_key)
             )
         """)
+        await db.commit()
+
+        # ---------- ESKI (TIKLANGAN) BAZA FAYLLARI UCHUN AVTOMATIK MIGRATSIYA ----------
+        # Kelajakda biror jadvalga yangi ustun qo'shilsa, shu yerga bitta qator qo'shiladi:
+        #   await _ensure_column(db, "jadval_nomi", "yangi_ustun", "TEXT")
+        # Hozircha qo'shiladigan yangi ustun yo'q.
         await db.commit()
 
         cur = await db.execute("SELECT COUNT(*) FROM branches")
