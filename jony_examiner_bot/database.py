@@ -248,6 +248,21 @@ async def list_admins():
         return [dict(r) for r in rows]
 
 
+async def get_all_user_ids() -> list:
+    """Botdan foydalangan HAMMA odamning telegram_id'lari — users jadvali (barcha
+    holatlar: active/pending/approved/rejected/removed) va admins jadvali birlashtirilgan.
+    Deploy'dan keyin \"bot yangilandi\" xabarini hammaga yuborish uchun ishlatiladi."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        ids = set()
+        cur = await db_.execute("SELECT telegram_id FROM users")
+        for (tid,) in await cur.fetchall():
+            ids.add(tid)
+        cur = await db_.execute("SELECT telegram_id FROM admins")
+        for (tid,) in await cur.fetchall():
+            ids.add(tid)
+        return list(ids)
+
+
 # ---------- ADMIN AMALLARI TARIXI (AUDIT LOG) ----------
 # Qaysi admin qachon nima o'zgartirish qilgani — boshqa adminlar ko'ra olishi uchun.
 
