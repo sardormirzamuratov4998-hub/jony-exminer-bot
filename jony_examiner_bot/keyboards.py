@@ -292,6 +292,7 @@ def admin_panel_kb():
     builder.button(text="📥 Bazani hoziroq yuklab olish", callback_data="admin_backup")
     builder.button(text="⏰ Eslatma vaqti", callback_data="admin_reminder_setting")
     builder.button(text="ℹ️ Admin guruh sozlash", callback_data="admin_group_info")
+    builder.button(text="📜 Amallar tarixi (audit log)", callback_data="admin_audit_log")
     builder.adjust(1)
     return builder.as_markup()
 
