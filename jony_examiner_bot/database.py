@@ -363,6 +363,18 @@ async def update_user_status(telegram_id: int, status: str):
         await db.commit()
 
 
+async def update_user_name(telegram_id: int, full_name: str):
+    """Admin xodim (ustoz/examiner/o'quv bo'lim rahbari) ismini o'zgartirganda ishlatiladi.
+    Eslatma: bu faqat users.full_name ni yangilaydi — allaqachon yaratilgan
+    buyurtmalardagi (bookings.teacher_name / examiner_name) eski ism o'zgarishsiz
+    qoladi, chunki ular buyurtma qilingan paytdagi holatning tarixiy nusxasi."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET full_name=? WHERE telegram_id=?", (full_name, telegram_id)
+        )
+        await db.commit()
+
+
 async def get_pending_examiners():
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
