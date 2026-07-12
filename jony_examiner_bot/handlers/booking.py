@@ -455,6 +455,7 @@ async def accept_booking_handler(callback: CallbackQuery):
         await callback.answer(msg, show_alert=True)
         return
 
+    # Tezkor (do'stona) tekshiruv — aniq javob esa pastdagi bo'linmas UPDATE'dan keladi.
     conflict = await db.examiner_has_conflict(
         callback.from_user.id, booking["exam_date"], booking["exam_time"]
     )
@@ -467,8 +468,18 @@ async def accept_booking_handler(callback: CallbackQuery):
         return
 
     examiner = await db.get_user(callback.from_user.id)
-    success = await db.accept_booking(booking_id, callback.from_user.id, examiner["full_name"])
-    if not success:
+    result = await db.accept_booking(
+        booking_id, callback.from_user.id, examiner["full_name"],
+        booking["exam_date"], booking["exam_time"],
+    )
+    if result == "conflict":
+        await callback.answer(
+            "Sizda shu sana va vaqtga allaqachon qabul qilingan boshqa imtihon bor. "
+            "Bu buyurtmani qabul qila olmaysiz.",
+            show_alert=True,
+        )
+        return
+    if result != "ok":
         await callback.answer("Kechirasiz, bu buyurtma allaqachon band qilingan.", show_alert=True)
         return
 
