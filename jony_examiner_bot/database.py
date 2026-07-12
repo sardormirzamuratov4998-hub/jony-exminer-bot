@@ -1006,6 +1006,10 @@ def _norm_group(group_name: str) -> str:
     return (group_name or "").strip().lower()
 
 
+def _student_key(s: dict) -> tuple:
+    return (s["surname"].strip().lower(), s["name"].strip().lower())
+
+
 async def _find_group_row(db, branch: str, group_name: str):
     """Berilgan filial + guruh nomiga case-insensitive mos keladigan qatorni topadi."""
     key = _norm_group(group_name)
@@ -1035,53 +1039,92 @@ async def get_saved_group_students(branch: str, group_name: str):
             return []
 
 
-async def _set_group_students(branch: str, group_name: str, students: list):
-    """Ro'yxatni TO'LIQ ALMASHTIRIB saqlaydi (ichki funksiya — merge qilmaydi).
-    Mavjud (case-insensitive mos) qator bo'lsa shuni yangilaydi, bo'lmasa yangi qo'shadi."""
-    if not branch or not group_name:
-        return
+async def _write_group_students(db, branch: str, group_name: str, row, students: list):
+    """Ro'yxatni TO'LIQ ALMASHTIRIB yozadi (ichki yordamchi — chaqiruvchi allaqachon
+    ochib qo'ygan `db` ulanishi/tranzaksiyasi ichida ishlaydi, o'zi commit qilmaydi)."""
     students_json = json.dumps(students, ensure_ascii=False)
-    async with aiosqlite.connect(DB_PATH) as db:
-        existing = await _find_group_row(db, branch, group_name)
-        if existing:
-            await db.execute(
-                "UPDATE saved_group_students SET students_json=?, updated_at=? WHERE id=?",
-                (students_json, now_tashkent().isoformat(), existing[0]),
-            )
-        else:
-            await db.execute(
-                """INSERT INTO saved_group_students (branch, group_name, students_json, updated_at)
-                   VALUES (?,?,?,?)""",
-                (branch, group_name, students_json, now_tashkent().isoformat()),
-            )
-        await db.commit()
+    if row:
+        await db.execute(
+            "UPDATE saved_group_students SET students_json=?, updated_at=? WHERE id=?",
+            (students_json, now_tashkent().isoformat(), row[0]),
+        )
+    else:
+        await db.execute(
+            """INSERT INTO saved_group_students (branch, group_name, students_json, updated_at)
+               VALUES (?,?,?,?)""",
+            (branch, group_name, students_json, now_tashkent().isoformat()),
+        )
 
 
 async def save_group_students(branch: str, group_name: str, students: list):
     """Shu filial + guruh uchun o'quvchilar ro'yxatini BIRLASHTIRIB (merge) saqlaydi:
     yangi kiritilgan o'quvchilar eski ro'yxatga QO'SHILADI (takrorlanmasdan),
     lekin eski o'quvchilar o'chib ketmaydi. Faqat "guruhdan o'chirish" funksiyasi
-    orqaligina o'quvchi butunlay olib tashlanadi."""
+    orqaligina o'quvchi butunlay olib tashlanadi.
+
+    O'qish (mavjud ro'yxatni olish) va yozish (birlashtirilganini saqlash) BITTA
+    atomik tranzaksiya (BEGIN IMMEDIATE) ichida bajariladi — aks holda ikki xodim
+    bir vaqtning atrofida shu guruhga o'quvchi qo'shsa, kim oxirgi yozsa o'shaniki
+    qolib, boshqasi qo'shgan o'quvchi(lar) jimgina yo'qolib ketishi mumkin edi."""
     if not branch or not group_name:
         return
-    existing = await get_saved_group_students(branch, group_name)
-    seen = {(s["surname"].strip().lower(), s["name"].strip().lower()) for s in existing}
-    merged = list(existing)
-    for s in students:
-        key = (s["surname"].strip().lower(), s["name"].strip().lower())
-        if key not in seen:
-            seen.add(key)
-            merged.append({"surname": s["surname"], "name": s["name"]})
-    await _set_group_students(branch, group_name, merged)
+    async with aiosqlite.connect(DB_PATH, isolation_level=None) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await _find_group_row(db, branch, group_name)
+            try:
+                existing = json.loads(row[2]) if row else []
+            except (json.JSONDecodeError, TypeError):
+                existing = []
+
+            seen = {_student_key(s) for s in existing}
+            merged = list(existing)
+            for s in students:
+                key = _student_key(s)
+                if key not in seen:
+                    seen.add(key)
+                    merged.append({"surname": s["surname"], "name": s["name"]})
+
+            await _write_group_students(db, branch, group_name, row, merged)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
-async def remove_students_from_group(branch: str, group_name: str, indices_to_remove: list):
-    """Saqlangan guruh ro'yxatidan berilgan index'dagi o'quvchi(lar)ni o'chiradi
-    va yangilangan ro'yxatni qaytaradi."""
-    current = await get_saved_group_students(branch, group_name)
-    remaining = [s for i, s in enumerate(current) if i not in set(indices_to_remove)]
-    await _set_group_students(branch, group_name, remaining)
-    return remaining
+async def remove_students_from_group(branch: str, group_name: str, students_to_remove: list):
+    """Saqlangan guruh ro'yxatidan berilgan o'quvchi(lar)ni o'chiradi va yangilangan
+    ro'yxatni qaytaradi.
+
+    `students_to_remove` — [{"surname": ..., "name": ...}, ...] shaklida, POZITSIYA
+    (indeks) EMAS. Avval bu funksiya ro'yxatdagi indeks bo'yicha o'chirar edi: agar
+    foydalanuvchi checkboxlarni belgilab turgan vaqtida (bir necha soniya/daqiqa)
+    boshqa birov o'sha guruh ro'yxatini o'zgartirgan bo'lsa, indekslar boshqa
+    o'quvchiga to'g'ri kelib, NOTO'G'RI odam o'chib ketishi mumkin edi. Ism/familiya
+    bo'yicha (identity) o'chirish bu xavfni yo'q qiladi: agar kimdir allaqachon
+    o'chirib bo'lgan bo'lsa, shunchaki hech narsa qilmay o'tkazib yuboradi.
+
+    O'qish va yozish shu yerda ham bitta atomik tranzaksiya ichida."""
+    if not branch or not group_name:
+        return []
+    keys_to_remove = {_student_key(s) for s in students_to_remove}
+    async with aiosqlite.connect(DB_PATH, isolation_level=None) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await _find_group_row(db, branch, group_name)
+            try:
+                current = json.loads(row[2]) if row else []
+            except (json.JSONDecodeError, TypeError):
+                current = []
+
+            remaining = [s for s in current if _student_key(s) not in keys_to_remove]
+
+            await _write_group_students(db, branch, group_name, row, remaining)
+            await db.commit()
+            return remaining
+        except Exception:
+            await db.rollback()
+            raise
 
 
 # ---------- 6) ADMIN QIDIRUV/FILTR ----------
