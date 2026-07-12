@@ -49,6 +49,7 @@ class ExamStates(StatesGroup):
 
 
 class RegStates(StatesGroup):
+    choose_language = State()
     choose_role = State()
     full_name = State()
     choose_branch = State()
@@ -75,18 +76,11 @@ class BookingStates(StatesGroup):
     repeat_unit_name = State()
     repeat_students_count = State()
 
-    # BUYURTMA VAQTINI KO'CHIRISH
-    reschedule_pick = State()
-    reschedule_date = State()
-    reschedule_time = State()
-
 
 class AdminStates(StatesGroup):
     search_query = State()
     reminder_input = State()
     branch_add_input = State()
     testtype_add_input = State()
-    restore_db_upload = State()
     grading_input = State()
     booking_field_add_input = State()
-    edit_name_input = State()
