@@ -1,4 +1,6 @@
 import os
+import shutil
+import sqlite3
 from datetime import datetime
 
 from aiogram import Router, F
@@ -21,6 +23,7 @@ from keyboards import (
     GRADING_LABELS,
     booking_field_manage_kb,
     booking_field_delete_confirm_kb,
+    cancel_kb,
 )
 
 router = Router()
@@ -844,6 +847,80 @@ async def backup_cb(callback: CallbackQuery):
         return
     await callback.message.answer_document(document, caption=caption)
     await callback.answer()
+
+
+# ---------- BAZANI FAYLDAN TIKLASH ----------
+
+@router.callback_query(F.data == "admin_restore_db")
+async def restore_db_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.restore_db_upload)
+    await callback.message.answer(
+        "⚠️ <b>Diqqat!</b> Yuboradigan .db fayl HOZIRGI bazani TO'LIQ almashtiradi "
+        "(barcha odamlar, buyurtmalar, sozlamalar shu fayldagisi bilan almashadi).\n\n"
+        "Tiklamoqchi bo'lgan .db faylni (masalan, avval \"📥 Bazani hoziroq yuklab olish\" "
+        "orqali olingan faylni) shu yerga yuboring:",
+        reply_markup=cancel_kb(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.restore_db_upload, F.text == "❌ Bekor qilish")
+async def restore_db_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Bekor qilindi. Baza o'zgarmadi.")
+
+
+@router.message(AdminStates.restore_db_upload, F.document)
+async def restore_db_process(message: Message, state: FSMContext):
+    doc = message.document
+    if not (doc.file_name or "").lower().endswith(".db"):
+        await message.answer("Iltimos, .db kengaytmali fayl yuboring (yoki \"❌ Bekor qilish\"):")
+        return
+
+    tmp_path = f"/tmp/restore_{message.from_user.id}.db"
+    file = await message.bot.get_file(doc.file_id)
+    await message.bot.download_file(file.file_path, tmp_path)
+
+    # Fayl haqiqiy va buzilmagan SQLite baza ekanligini tekshiramiz
+    try:
+        with open(tmp_path, "rb") as f:
+            header = f.read(16)
+        if not header.startswith(b"SQLite format 3"):
+            raise ValueError("SQLite fayl emas")
+        check_conn = sqlite3.connect(tmp_path)
+        check_conn.execute("SELECT COUNT(*) FROM users")
+        check_conn.close()
+    except Exception:
+        await state.clear()
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        await message.answer(
+            "⚠️ Bu fayl to'g'ri baza fayli emas (yoki buzilgan). Tiklash bekor qilindi, "
+            "hozirgi baza o'zgarmadi."
+        )
+        return
+
+    shutil.copyfile(tmp_path, db.DB_PATH)
+    os.remove(tmp_path)
+    await state.clear()
+    await message.answer(
+        "✅ Baza muvaffaqiyatli tiklandi! Bot shu fayldagi ma'lumotlar bilan davom etadi.\n\n"
+        "ℹ️ Agar Railway'da hali doimiy Volume ulanmagan bo'lsa, keyingi safar kod "
+        "yangilanganda baza yana noldan boshlanishi mumkin — buni butunlay hal qilish "
+        "uchun Volume ulash tavsiya etiladi."
+    )
+
+
+@router.message(AdminStates.restore_db_upload)
+async def restore_db_wrong_input(message: Message):
+    await message.answer(
+        "Iltimos, .db faylni biriktirib yuboring, yoki \"❌ Bekor qilish\" deb bosing."
+    )
 
 
 @router.message(Command("stats"))
