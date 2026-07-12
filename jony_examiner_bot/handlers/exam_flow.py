@@ -142,13 +142,24 @@ async def pending_orders(message: Message):
         await message.answer("Bu funksiya faqat tasdiqlangan Examinerlar uchun.")
         return
 
-    bookings = await db.get_pending_bookings_by_branch(user["branch"])
+    branches = await db.get_user_all_branches(message.from_user.id, user["branch"])
+    if not branches:
+        branches = [user["branch"]]
+
+    seen_ids = set()
+    bookings = []
+    for br in branches:
+        for b in await db.get_pending_bookings_by_branch(br):
+            if b["id"] not in seen_ids:
+                seen_ids.add(b["id"])
+                bookings.append(b)
+
     if not bookings:
         await message.answer("Hozircha kutilayotgan (qabul qilinmagan) buyurtmalar yo'q.")
         return
 
     await message.answer(
-        f"🕓 <b>{user['branch']}</b> filiali bo'yicha kutilayotgan buyurtmalar ({len(bookings)} ta):"
+        f"🕓 <b>{', '.join(branches)}</b> filial(lar)i bo'yicha kutilayotgan buyurtmalar ({len(bookings)} ta):"
     )
     for b in bookings:
         test_info = b["test_type"]
