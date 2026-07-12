@@ -5,6 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 import database as db
+from error_notify import notify_admin_error
 
 logger = logging.getLogger(__name__)
 
@@ -123,17 +124,30 @@ async def send_daily_report(bot):
         logger.exception("Kunlik hisobot yuborishda xatolik")
 
 
+def _safe_job(func):
+    """APScheduler ichidagi vazifalar aiogramning global xato ushlagichidan
+    tashqarida ishlaydi — shuning uchun ularni alohida o'raymiz: xatolik chiqsa
+    job "jimgina" o'lib qolmaydi, log qilinadi va admin guruhga xabar boradi."""
+    async def wrapper(bot):
+        try:
+            await func(bot)
+        except Exception as e:
+            await notify_admin_error(bot, f"scheduler:{func.__name__}", e)
+    wrapper.__name__ = f"safe_{func.__name__}"
+    return wrapper
+
+
 def start_scheduler(bot):
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(check_reminders, "interval", minutes=1, args=[bot])
-    scheduler.add_job(check_expired_bookings, "interval", minutes=10, args=[bot])
+    scheduler.add_job(_safe_job(check_reminders), "interval", minutes=1, args=[bot])
+    scheduler.add_job(_safe_job(check_expired_bookings), "interval", minutes=10, args=[bot])
     scheduler.add_job(
-        send_daily_report,
+        _safe_job(send_daily_report),
         CronTrigger(hour=18, minute=0, timezone=db.TASHKENT_TZ),
         args=[bot],
     )
     scheduler.add_job(
-        check_escalations,
+        _safe_job(check_escalations),
         CronTrigger(hour=18, minute=0, timezone=db.TASHKENT_TZ),
         args=[bot],
     )
