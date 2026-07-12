@@ -24,7 +24,7 @@ router = Router()
 
 async def _is_teacher(telegram_id: int):
     user = await db.get_user(telegram_id)
-    return user if user and user["role"] == "TEACHER" else None
+    return user if user and user["role"] == "TEACHER" and user["status"] != "removed" else None
 
 
 def _custom_fields_block(data) -> str:
