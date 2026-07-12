@@ -1,15 +1,20 @@
 import aiosqlite
 import json
+import os
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-DB_PATH = "jony_bookings.db"
+# Railway'da doimiy (persistent) Volume ulangan bo'lsa, DB_PATH shu Volume papkasiga
+# ko'rsatilishi kerak (masalan: /data/jony_bookings.db) — aks holda har deployda
+# ma'lumot yo'qolib ketadi. Railway "Variables" bo'limiga DB_PATH qo'shing.
+DB_PATH = os.getenv("DB_PATH", "jony_bookings.db")
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
 
 DEFAULT_BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
 DEFAULT_TEST_TYPES = ["UNIT TEST", "END OF COURSE", "MIDTERM"]
-SUPPORTED_LANGUAGES = ["uz", "ru"]
-DEFAULT_LANGUAGE = "uz"
 
 TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
 
@@ -20,6 +25,22 @@ def now_tashkent() -> datetime:
     sana/vaqt ham foydalanuvchi tomonidan Toshkent vaqtida kiritiladi,
     shuning uchun taqqoslashlar shu funksiya orqali izchil bo'lishi kerak."""
     return datetime.now(TASHKENT_TZ).replace(tzinfo=None)
+
+
+async def _ensure_column(db_, table: str, column: str, coldef: str):
+    """Eski (tiklangan) baza fayllarida yangi qo'shilgan ustun bo'lmasligi mumkin —
+    shuni avtomatik, mavjud ma'lumotni O'CHIRMASDAN qo'shib qo'yadi.
+
+    MUHIM: bundan keyin biror jadvalga yangi ustun qo'shilsa, faqat CREATE TABLE
+    qatoriga yozish YETARLI EMAS (u eski jadvalga ta'sir qilmaydi) — shu funksiya
+    orqali ham qo'shilishi kerak, masalan:
+        await _ensure_column(db, "users", "phone_number", "TEXT")
+    Shunda eski .db faylni tiklagandan keyin ham bot xatosiz ishlayveradi.
+    """
+    cur = await db_.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in await cur.fetchall()}
+    if column not in existing:
+        await db_.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
 
 
 async def init_db():
@@ -35,13 +56,6 @@ async def init_db():
                 username TEXT
             )
         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS user_languages (
-                telegram_id INTEGER PRIMARY KEY,
-                language TEXT NOT NULL DEFAULT 'uz'
-            )
-        """)
-        await db.commit()
         await db.execute("""
             CREATE TABLE IF NOT EXISTS teacher_branches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,7 +110,7 @@ async def init_db():
             )
         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS dept_heads (
+            CREATE TABLE IF NOT EXISTS study_head_allowed (
                 telegram_id INTEGER PRIMARY KEY,
                 full_name TEXT,
                 username TEXT,
@@ -163,6 +177,12 @@ async def init_db():
         """)
         await db.commit()
 
+        # ---------- ESKI (TIKLANGAN) BAZA FAYLLARI UCHUN AVTOMATIK MIGRATSIYA ----------
+        # Kelajakda biror jadvalga yangi ustun qo'shilsa, shu yerga bitta qator qo'shiladi:
+        #   await _ensure_column(db, "jadval_nomi", "yangi_ustun", "TEXT")
+        # Hozircha qo'shiladigan yangi ustun yo'q.
+        await db.commit()
+
         cur = await db.execute("SELECT COUNT(*) FROM branches")
         (count,) = await cur.fetchone()
         if count == 0:
@@ -218,36 +238,46 @@ async def list_admins():
         return [dict(r) for r in rows]
 
 
-# ---------- O'QUV BO'LIM RAHBARLARI (DEPT HEADS) ----------
-# Admin ruxsat bergan shaxs — filialdan qat'iy nazar END OF COURSE/MIDTERM
-# buyurtmalari va natija excel fayllari shu odamga ham yuboriladi.
+# ---------- O'QUV BO'LIM RAHBARI (STUDY HEAD) RUXSATLARI ----------
+# Bu lavozimni faqat admin ruxsat bergan odam ola oladi (adminlar tizimiga o'xshash).
 
-async def is_dept_head(telegram_id: int) -> bool:
+async def is_study_head_allowed(telegram_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db_:
-        cur = await db_.execute("SELECT 1 FROM dept_heads WHERE telegram_id=?", (telegram_id,))
+        cur = await db_.execute(
+            "SELECT 1 FROM study_head_allowed WHERE telegram_id=?", (telegram_id,)
+        )
         return await cur.fetchone() is not None
 
 
-async def add_dept_head(telegram_id: int, full_name: str = None, username: str = None, added_by: int = None):
+async def add_study_head_allowed(telegram_id: int, full_name: str = None, username: str = None, added_by: int = None):
     async with aiosqlite.connect(DB_PATH) as db_:
         await db_.execute(
-            "INSERT OR IGNORE INTO dept_heads (telegram_id, full_name, username, added_by, added_at) "
+            "INSERT OR IGNORE INTO study_head_allowed (telegram_id, full_name, username, added_by, added_at) "
             "VALUES (?,?,?,?,?)",
             (telegram_id, full_name, username, added_by, now_tashkent().isoformat()),
         )
         await db_.commit()
 
 
-async def remove_dept_head(telegram_id: int):
+async def remove_study_head_allowed(telegram_id: int):
     async with aiosqlite.connect(DB_PATH) as db_:
-        await db_.execute("DELETE FROM dept_heads WHERE telegram_id=?", (telegram_id,))
+        await db_.execute("DELETE FROM study_head_allowed WHERE telegram_id=?", (telegram_id,))
         await db_.commit()
 
 
-async def list_dept_heads():
+async def list_study_head_allowed():
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
-        cur = await db_.execute("SELECT * FROM dept_heads")
+        cur = await db_.execute("SELECT * FROM study_head_allowed")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_active_study_heads():
+    """STUDY_HEAD rolidagi faol foydalanuvchilar — filialdan qat'iy nazar."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM users WHERE role='STUDY_HEAD' AND status='active'")
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
@@ -327,43 +357,21 @@ async def upsert_user(telegram_id: int, role: str, full_name: str, branch: str, 
         await db.commit()
 
 
-# ---------- TIL (LANGUAGE) ----------
-# Alohida jadvalda saqlanadi (users jadvaliga bog'lanmagan), chunki admin yoki
-# o'quv bo'lim rahbari kabi ba'zi odamlarning users jadvalida umuman yozuvi
-# bo'lmasligi mumkin — ular ham til tanlay olishi kerak.
-
-async def has_language_pref(telegram_id: int) -> bool:
-    """Bu odam avval tilni tanlab, DB'ga saqlaganmi — yo'qmi."""
-    async with aiosqlite.connect(DB_PATH) as db_:
-        cur = await db_.execute("SELECT 1 FROM user_languages WHERE telegram_id=?", (telegram_id,))
-        return await cur.fetchone() is not None
-
-
-async def get_user_language(telegram_id: int) -> str:
-    async with aiosqlite.connect(DB_PATH) as db_:
-        cur = await db_.execute(
-            "SELECT language FROM user_languages WHERE telegram_id=?", (telegram_id,)
-        )
-        row = await cur.fetchone()
-        return row[0] if row and row[0] else DEFAULT_LANGUAGE
-
-
-async def set_user_language(telegram_id: int, lang: str) -> bool:
-    if lang not in SUPPORTED_LANGUAGES:
-        return False
-    async with aiosqlite.connect(DB_PATH) as db_:
-        await db_.execute(
-            """INSERT INTO user_languages (telegram_id, language) VALUES (?,?)
-               ON CONFLICT(telegram_id) DO UPDATE SET language=excluded.language""",
-            (telegram_id, lang),
-        )
-        await db_.commit()
-        return True
-
-
 async def update_user_status(telegram_id: int, status: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE users SET status=? WHERE telegram_id=?", (status, telegram_id))
+        await db.commit()
+
+
+async def update_user_name(telegram_id: int, full_name: str):
+    """Admin xodim (ustoz/examiner/o'quv bo'lim rahbari) ismini o'zgartirganda ishlatiladi.
+    Eslatma: bu faqat users.full_name ni yangilaydi — allaqachon yaratilgan
+    buyurtmalardagi (bookings.teacher_name / examiner_name) eski ism o'zgarishsiz
+    qoladi, chunki ular buyurtma qilingan paytdagi holatning tarixiy nusxasi."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE users SET full_name=? WHERE telegram_id=?", (full_name, telegram_id)
+        )
         await db.commit()
 
 
@@ -381,6 +389,17 @@ async def get_all_staff():
         db_.row_factory = aiosqlite.Row
         cur = await db_.execute(
             "SELECT * FROM users WHERE status != 'removed' ORDER BY branch, role, full_name"
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_removed_staff():
+    """Admin tomonidan o'chirilgan (qora ro'yxatdagi) foydalanuvchilar — tiklash uchun."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            "SELECT * FROM users WHERE status='removed' ORDER BY full_name"
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -449,15 +468,43 @@ async def get_last_booking_by_group(telegram_id: int, group_name: str):
         return dict(row) if row else None
 
 
+async def find_teacher_group_names(telegram_id: int, query: str, limit: int = 8):
+    """Ustozning avvalgi buyurtmalari orasidan `query` so'zini o'z ichiga olgan guruh
+    nomlarini qidiradi (masalan 'Step 3' yozilsa 'Step 3 (Vikings)' ham topiladi).
+    Eng so'nggi buyurtma qilingan guruhlar birinchi bo'lib qaytadi."""
+    query = (query or "").strip()
+    if not query:
+        return []
+    like_query = f"%{query}%"
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            """SELECT group_name, MAX(created_at) AS last_created
+               FROM bookings
+               WHERE teacher_telegram_id=? AND LOWER(group_name) LIKE LOWER(?)
+               GROUP BY group_name
+               ORDER BY last_created DESC
+               LIMIT ?""",
+            (telegram_id, like_query, limit),
+        )
+        rows = await cur.fetchall()
+        return [r["group_name"] for r in rows]
+
+
 async def get_examiners_by_branch(branch: str, status: str = "active"):
-    """'active' va eski 'approved' statusli examinerlarni ham qamrab oladi (eski ma'lumotlar bilan mos)."""
+    """'active' va eski 'approved' statusli examinerlarni ham qamrab oladi (eski ma'lumotlar bilan mos).
+    Examinerning ASOSIY filiali (users.branch) yoki qo'shimcha filiallaridan
+    (teacher_branches — ustoz va examiner uchun umumiy) biri mos kelsa yetarli."""
     statuses = ["active", "approved"] if status == "active" else [status]
     placeholders = ",".join("?" * len(statuses))
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
         cur = await db_.execute(
-            f"SELECT * FROM users WHERE role='EXAMINER' AND branch=? AND status IN ({placeholders})",
-            (branch, *statuses),
+            f"""SELECT DISTINCT u.* FROM users u
+                LEFT JOIN teacher_branches tb ON tb.telegram_id = u.telegram_id
+                WHERE u.role='EXAMINER' AND u.status IN ({placeholders})
+                  AND (u.branch=? OR tb.branch=?)""",
+            (*statuses, branch, branch),
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -600,7 +647,7 @@ async def get_booking_field_values(booking_id: int) -> dict:
         return {r[0]: r[1] for r in rows}
 
 
-# ---------- TEACHER BRANCHES (bir nechta filialda ishlash) ----------
+# ---------- TEACHER BRANCHES (bir nechta filialda ishlash — ustoz VA examiner uchun) ----------
 
 async def add_teacher_branch(telegram_id: int, branch: str):
     async with aiosqlite.connect(DB_PATH) as db_:
@@ -618,6 +665,61 @@ async def get_teacher_branches(telegram_id: int):
         )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+
+async def get_user_all_branches(telegram_id: int, primary_branch: str = None):
+    """Foydalanuvchining ASOSIY filiali + qo'shgan barcha qo'shimcha filiallari
+    (dublikatsiz, alifbo tartibida)."""
+    branches = set(await get_teacher_branches(telegram_id))
+    if primary_branch:
+        branches.add(primary_branch)
+    return sorted(branches)
+
+
+async def remove_user_from_branch(telegram_id: int, branch: str):
+    """Foydalanuvchini faqat KO'RSATILGAN filialdan chiqaradi.
+    - Agar bu uning yagona filiali bo'lsa — hisobi butunlay 'removed' qilinadi.
+    - Agar bu uning ASOSIY filiali bo'lib, boshqa qo'shimcha filiallari ham bo'lsa —
+      qolgan filiallardan biri yangi asosiy filial qilib belgilanadi.
+
+    BEGIN IMMEDIATE bilan boshlanadi — bir necha admin AYNAN BIR xodimni bir vaqtda
+    boshqa-boshqa filiallardan chiqarmoqchi bo'lsa ham, bu amal bo'linmas bajariladi
+    (o'qish+hisoblash+yozish oralig'ida boshqa yozuv kirib qolmaydi)."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        await db_.execute("BEGIN IMMEDIATE")
+        cur = await db_.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
+        row = await cur.fetchone()
+        if not row:
+            await db_.rollback()
+            return
+        user = dict(row)
+
+        cur2 = await db_.execute(
+            "SELECT branch FROM teacher_branches WHERE telegram_id=? ORDER BY branch", (telegram_id,)
+        )
+        extra_branches = [r[0] for r in await cur2.fetchall()]
+
+        remaining = set(extra_branches)
+        remaining.add(user["branch"])
+        remaining.discard(branch)
+
+        if not remaining:
+            await db_.execute("UPDATE users SET status='removed' WHERE telegram_id=?", (telegram_id,))
+        else:
+            await db_.execute(
+                "DELETE FROM teacher_branches WHERE telegram_id=? AND branch=?", (telegram_id, branch)
+            )
+            if user["branch"] == branch:
+                new_primary = sorted(remaining)[0]
+                await db_.execute(
+                    "UPDATE users SET branch=? WHERE telegram_id=?", (new_primary, telegram_id)
+                )
+                await db_.execute(
+                    "DELETE FROM teacher_branches WHERE telegram_id=? AND branch=?",
+                    (telegram_id, new_primary),
+                )
+        await db_.commit()
 
 
 # ---------- BOOKINGS ----------
@@ -648,19 +750,41 @@ async def get_booking(booking_id: int):
         return dict(row) if row else None
 
 
-async def accept_booking(booking_id: int, examiner_telegram_id: int, examiner_name: str) -> bool:
-    """Returns True if successfully accepted (was pending), False if already taken."""
+async def accept_booking(booking_id: int, examiner_telegram_id: int, examiner_name: str,
+                          exam_date: str, exam_time: str) -> str:
+    """Returns 'ok' | 'taken' | 'conflict'.
+
+    Avval "band emasmi" tekshiruvi (examiner_has_conflict) va "qabul qilish" ikki
+    ALOHIDA so'rov edi — bitta examiner ikkita bir xil vaqtga to'g'ri keladigan
+    buyurtmani deyarli bir vaqtda qabul qilsa, ikkalasi ham "muvaffaqiyatli"
+    bo'lib, u bitta vaqtga ikkita imtihonga "yozilib" qolishi mumkin edi.
+    Endi ikkala tekshiruv (band emasligi VA zid kelmasligi) bitta shartli UPDATE
+    ichida — bo'linmas holda bajariladi."""
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT status FROM bookings WHERE id=?", (booking_id,))
-        row = await cur.fetchone()
-        if not row or row[0] != "pending":
-            return False
-        await db.execute(
-            "UPDATE bookings SET status='accepted', examiner_telegram_id=?, examiner_name=?, accepted_at=? WHERE id=?",
-            (examiner_telegram_id, examiner_name, now_tashkent().isoformat(), booking_id),
+        cur = await db.execute(
+            """UPDATE bookings SET status='accepted', examiner_telegram_id=?,
+               examiner_name=?, accepted_at=?
+               WHERE id=? AND status='pending'
+               AND NOT EXISTS (
+                   SELECT 1 FROM bookings
+                   WHERE examiner_telegram_id=? AND exam_date=? AND exam_time=? AND status='accepted'
+               )""",
+            (
+                examiner_telegram_id, examiner_name, now_tashkent().isoformat(),
+                booking_id, examiner_telegram_id, exam_date, exam_time,
+            ),
         )
         await db.commit()
-        return True
+        if cur.rowcount > 0:
+            return "ok"
+
+        # Nima uchun muvaffaqiyatsiz bo'lganini aniqlaymiz — foydalanuvchiga
+        # to'g'ri xabar ko'rsatish uchun.
+        cur2 = await db.execute("SELECT status FROM bookings WHERE id=?", (booking_id,))
+        row = await cur2.fetchone()
+        if row and row[0] == "pending":
+            return "conflict"
+        return "taken"
 
 
 async def examiner_has_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str) -> bool:
@@ -716,6 +840,20 @@ async def get_all_pending_bookings():
         return [dict(r) for r in rows]
 
 
+async def get_pending_bookings_by_branch(branch: str):
+    """Berilgan filial uchun hali hech kim qabul qilmagan (pending) buyurtmalar.
+    Examiner o'tkazib yuborgan yoki o'sha payt hali ro'yxatdan o'tmagan bo'lsa,
+    'Kutilayotgan buyurtmalar' tugmasi orqali shu ro'yxatni ko'rib qabul qilishi uchun."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM bookings WHERE status='pending' AND branch=? ORDER BY exam_date, exam_time",
+            (branch,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def mark_escalated(booking_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE bookings SET escalated=1 WHERE id=?", (booking_id,))
@@ -743,6 +881,51 @@ async def cancel_booking(booking_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE bookings SET status='cancelled' WHERE id=?", (booking_id,))
         await db.commit()
+
+
+async def reschedule_booking(booking_id: int, exam_date: str, exam_time: str,
+                              examiner_telegram_id: int = None) -> str:
+    """Returns 'ok' | 'not_found' | 'conflict'.
+
+    Avvalgi versiyada konflikt tekshiruvi (examiner_has_conflict) va yozish
+    ikki ALOHIDA so'rov edi — xuddi accept_booking'da avval bo'lgani kabi,
+    bitta examinerga biriktirilgan ikkita buyurtma deyarli bir vaqtda bir xil
+    yangi sana/vaqtga ko'chirilsa, ikkalasi ham "muvaffaqiyatli" bo'lib,
+    examiner bitta vaqtga ikkita imtihonga "yozilib" qolishi mumkin edi.
+    Endi (agar booking allaqachon examinerga biriktirilgan bo'lsa) tekshiruv
+    va yozish bitta shartli UPDATE ichida — bo'linmas holda bajariladi."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if examiner_telegram_id is not None:
+            cur = await db.execute(
+                """UPDATE bookings SET exam_date=?, exam_time=?,
+                   reminder_1h_sent=0, reminder_time_sent=0, escalated=0
+                   WHERE id=?
+                   AND NOT EXISTS (
+                       SELECT 1 FROM bookings
+                       WHERE examiner_telegram_id=? AND exam_date=? AND exam_time=?
+                         AND status='accepted' AND id != ?
+                   )""",
+                (
+                    exam_date, exam_time, booking_id,
+                    examiner_telegram_id, exam_date, exam_time, booking_id,
+                ),
+            )
+        else:
+            cur = await db.execute(
+                """UPDATE bookings SET exam_date=?, exam_time=?,
+                   reminder_1h_sent=0, reminder_time_sent=0, escalated=0
+                   WHERE id=?""",
+                (exam_date, exam_time, booking_id),
+            )
+        await db.commit()
+        if cur.rowcount > 0:
+            return "ok"
+
+        cur2 = await db.execute("SELECT id FROM bookings WHERE id=?", (booking_id,))
+        row = await cur2.fetchone()
+        if not row:
+            return "not_found"
+        return "conflict"
 
 
 async def expire_past_bookings():
@@ -823,6 +1006,10 @@ def _norm_group(group_name: str) -> str:
     return (group_name or "").strip().lower()
 
 
+def _student_key(s: dict) -> tuple:
+    return (s["surname"].strip().lower(), s["name"].strip().lower())
+
+
 async def _find_group_row(db, branch: str, group_name: str):
     """Berilgan filial + guruh nomiga case-insensitive mos keladigan qatorni topadi."""
     key = _norm_group(group_name)
@@ -852,53 +1039,92 @@ async def get_saved_group_students(branch: str, group_name: str):
             return []
 
 
-async def _set_group_students(branch: str, group_name: str, students: list):
-    """Ro'yxatni TO'LIQ ALMASHTIRIB saqlaydi (ichki funksiya — merge qilmaydi).
-    Mavjud (case-insensitive mos) qator bo'lsa shuni yangilaydi, bo'lmasa yangi qo'shadi."""
-    if not branch or not group_name:
-        return
+async def _write_group_students(db, branch: str, group_name: str, row, students: list):
+    """Ro'yxatni TO'LIQ ALMASHTIRIB yozadi (ichki yordamchi — chaqiruvchi allaqachon
+    ochib qo'ygan `db` ulanishi/tranzaksiyasi ichida ishlaydi, o'zi commit qilmaydi)."""
     students_json = json.dumps(students, ensure_ascii=False)
-    async with aiosqlite.connect(DB_PATH) as db:
-        existing = await _find_group_row(db, branch, group_name)
-        if existing:
-            await db.execute(
-                "UPDATE saved_group_students SET students_json=?, updated_at=? WHERE id=?",
-                (students_json, now_tashkent().isoformat(), existing[0]),
-            )
-        else:
-            await db.execute(
-                """INSERT INTO saved_group_students (branch, group_name, students_json, updated_at)
-                   VALUES (?,?,?,?)""",
-                (branch, group_name, students_json, now_tashkent().isoformat()),
-            )
-        await db.commit()
+    if row:
+        await db.execute(
+            "UPDATE saved_group_students SET students_json=?, updated_at=? WHERE id=?",
+            (students_json, now_tashkent().isoformat(), row[0]),
+        )
+    else:
+        await db.execute(
+            """INSERT INTO saved_group_students (branch, group_name, students_json, updated_at)
+               VALUES (?,?,?,?)""",
+            (branch, group_name, students_json, now_tashkent().isoformat()),
+        )
 
 
 async def save_group_students(branch: str, group_name: str, students: list):
     """Shu filial + guruh uchun o'quvchilar ro'yxatini BIRLASHTIRIB (merge) saqlaydi:
     yangi kiritilgan o'quvchilar eski ro'yxatga QO'SHILADI (takrorlanmasdan),
     lekin eski o'quvchilar o'chib ketmaydi. Faqat "guruhdan o'chirish" funksiyasi
-    orqaligina o'quvchi butunlay olib tashlanadi."""
+    orqaligina o'quvchi butunlay olib tashlanadi.
+
+    O'qish (mavjud ro'yxatni olish) va yozish (birlashtirilganini saqlash) BITTA
+    atomik tranzaksiya (BEGIN IMMEDIATE) ichida bajariladi — aks holda ikki xodim
+    bir vaqtning atrofida shu guruhga o'quvchi qo'shsa, kim oxirgi yozsa o'shaniki
+    qolib, boshqasi qo'shgan o'quvchi(lar) jimgina yo'qolib ketishi mumkin edi."""
     if not branch or not group_name:
         return
-    existing = await get_saved_group_students(branch, group_name)
-    seen = {(s["surname"].strip().lower(), s["name"].strip().lower()) for s in existing}
-    merged = list(existing)
-    for s in students:
-        key = (s["surname"].strip().lower(), s["name"].strip().lower())
-        if key not in seen:
-            seen.add(key)
-            merged.append({"surname": s["surname"], "name": s["name"]})
-    await _set_group_students(branch, group_name, merged)
+    async with aiosqlite.connect(DB_PATH, isolation_level=None) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await _find_group_row(db, branch, group_name)
+            try:
+                existing = json.loads(row[2]) if row else []
+            except (json.JSONDecodeError, TypeError):
+                existing = []
+
+            seen = {_student_key(s) for s in existing}
+            merged = list(existing)
+            for s in students:
+                key = _student_key(s)
+                if key not in seen:
+                    seen.add(key)
+                    merged.append({"surname": s["surname"], "name": s["name"]})
+
+            await _write_group_students(db, branch, group_name, row, merged)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
-async def remove_students_from_group(branch: str, group_name: str, indices_to_remove: list):
-    """Saqlangan guruh ro'yxatidan berilgan index'dagi o'quvchi(lar)ni o'chiradi
-    va yangilangan ro'yxatni qaytaradi."""
-    current = await get_saved_group_students(branch, group_name)
-    remaining = [s for i, s in enumerate(current) if i not in set(indices_to_remove)]
-    await _set_group_students(branch, group_name, remaining)
-    return remaining
+async def remove_students_from_group(branch: str, group_name: str, students_to_remove: list):
+    """Saqlangan guruh ro'yxatidan berilgan o'quvchi(lar)ni o'chiradi va yangilangan
+    ro'yxatni qaytaradi.
+
+    `students_to_remove` — [{"surname": ..., "name": ...}, ...] shaklida, POZITSIYA
+    (indeks) EMAS. Avval bu funksiya ro'yxatdagi indeks bo'yicha o'chirar edi: agar
+    foydalanuvchi checkboxlarni belgilab turgan vaqtida (bir necha soniya/daqiqa)
+    boshqa birov o'sha guruh ro'yxatini o'zgartirgan bo'lsa, indekslar boshqa
+    o'quvchiga to'g'ri kelib, NOTO'G'RI odam o'chib ketishi mumkin edi. Ism/familiya
+    bo'yicha (identity) o'chirish bu xavfni yo'q qiladi: agar kimdir allaqachon
+    o'chirib bo'lgan bo'lsa, shunchaki hech narsa qilmay o'tkazib yuboradi.
+
+    O'qish va yozish shu yerda ham bitta atomik tranzaksiya ichida."""
+    if not branch or not group_name:
+        return []
+    keys_to_remove = {_student_key(s) for s in students_to_remove}
+    async with aiosqlite.connect(DB_PATH, isolation_level=None) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            row = await _find_group_row(db, branch, group_name)
+            try:
+                current = json.loads(row[2]) if row else []
+            except (json.JSONDecodeError, TypeError):
+                current = []
+
+            remaining = [s for s in current if _student_key(s) not in keys_to_remove]
+
+            await _write_group_students(db, branch, group_name, row, remaining)
+            await db.commit()
+            return remaining
+        except Exception:
+            await db.rollback()
+            raise
 
 
 # ---------- 6) ADMIN QIDIRUV/FILTR ----------
