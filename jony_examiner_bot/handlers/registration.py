@@ -204,7 +204,7 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text == "➕ Filial qo'shish")
 async def add_branch_start(message: Message):
     user = await db.get_user(message.from_user.id)
-    if not user or user["role"] not in ("TEACHER", "EXAMINER"):
+    if not user or user["role"] not in ("TEACHER", "EXAMINER") or user["status"] == "removed":
         return
     all_branches = await db.get_branches()
     existing = await db.get_teacher_branches(message.from_user.id)
@@ -232,6 +232,10 @@ async def study_head_help(message: Message):
 
 @router.callback_query(F.data.startswith("addbranch:"))
 async def add_branch_confirm(callback: CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    if not user or user["role"] not in ("TEACHER", "EXAMINER") or user["status"] == "removed":
+        await callback.answer("Bu amal siz uchun mavjud emas.", show_alert=True)
+        return
     branch = callback.data.split(":", 1)[1]
     await db.add_teacher_branch(callback.from_user.id, branch)
     await callback.message.edit_text(f"✅ {branch} filiali qo'shildi.")
