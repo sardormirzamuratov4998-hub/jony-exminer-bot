@@ -32,18 +32,15 @@ async def init_db():
                 full_name TEXT NOT NULL,
                 branch TEXT NOT NULL,        -- asosiy (birinchi) filial
                 status TEXT NOT NULL,        -- active | pending | approved | rejected | removed
-                username TEXT,
-                language TEXT NOT NULL DEFAULT 'uz'   -- uz | ru
+                username TEXT
             )
         """)
-        # Eski (allaqachon yaratilgan) bazalarda "language" ustuni bo'lmasligi mumkin —
-        # shu holat uchun mavjud users jadvaliga ustunni qo'shib qo'yamiz.
-        cur = await db.execute("PRAGMA table_info(users)")
-        existing_cols = [row[1] for row in await cur.fetchall()]
-        if "language" not in existing_cols:
-            await db.execute(
-                f"ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT '{DEFAULT_LANGUAGE}'"
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_languages (
+                telegram_id INTEGER PRIMARY KEY,
+                language TEXT NOT NULL DEFAULT 'uz'
             )
+        """)
         await db.commit()
         await db.execute("""
             CREATE TABLE IF NOT EXISTS teacher_branches (
@@ -316,31 +313,37 @@ async def get_user(telegram_id: int):
         return dict(row) if row else None
 
 
-async def upsert_user(telegram_id: int, role: str, full_name: str, branch: str, status: str,
-                       username: str = None, language: str = None):
-    """Foydalanuvchi mavjud bo'lsa yangilaydi (rol o'zgartirish uchun), bo'lmasa yaratadi.
-
-    `language` faqat YANGI foydalanuvchi yaratilganda o'rnatiladi (berilmasa,
-    standart 'uz'). Mavjud foydalanuvchi uchun (masalan /change_role orqali)
-    tanlangan tili o'zgartirilmaydi — buning uchun set_user_language ishlatiladi.
-    """
-    if language is None:
-        language = DEFAULT_LANGUAGE
+async def upsert_user(telegram_id: int, role: str, full_name: str, branch: str, status: str, username: str = None):
+    """Foydalanuvchi mavjud bo'lsa yangilaydi (rol o'zgartirish uchun), bo'lmasa yaratadi."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO users (telegram_id, role, full_name, branch, status, username, language)
-               VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO users (telegram_id, role, full_name, branch, status, username)
+               VALUES (?,?,?,?,?,?)
                ON CONFLICT(telegram_id) DO UPDATE SET
                  role=excluded.role, full_name=excluded.full_name,
                  branch=excluded.branch, status=excluded.status, username=excluded.username""",
-            (telegram_id, role, full_name, branch, status, username, language),
+            (telegram_id, role, full_name, branch, status, username),
         )
         await db.commit()
 
 
+# ---------- TIL (LANGUAGE) ----------
+# Alohida jadvalda saqlanadi (users jadvaliga bog'lanmagan), chunki admin yoki
+# o'quv bo'lim rahbari kabi ba'zi odamlarning users jadvalida umuman yozuvi
+# bo'lmasligi mumkin — ular ham til tanlay olishi kerak.
+
+async def has_language_pref(telegram_id: int) -> bool:
+    """Bu odam avval tilni tanlab, DB'ga saqlaganmi — yo'qmi."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute("SELECT 1 FROM user_languages WHERE telegram_id=?", (telegram_id,))
+        return await cur.fetchone() is not None
+
+
 async def get_user_language(telegram_id: int) -> str:
     async with aiosqlite.connect(DB_PATH) as db_:
-        cur = await db_.execute("SELECT language FROM users WHERE telegram_id=?", (telegram_id,))
+        cur = await db_.execute(
+            "SELECT language FROM user_languages WHERE telegram_id=?", (telegram_id,)
+        )
         row = await cur.fetchone()
         return row[0] if row and row[0] else DEFAULT_LANGUAGE
 
@@ -349,7 +352,11 @@ async def set_user_language(telegram_id: int, lang: str) -> bool:
     if lang not in SUPPORTED_LANGUAGES:
         return False
     async with aiosqlite.connect(DB_PATH) as db_:
-        await db_.execute("UPDATE users SET language=? WHERE telegram_id=?", (lang, telegram_id))
+        await db_.execute(
+            """INSERT INTO user_languages (telegram_id, language) VALUES (?,?)
+               ON CONFLICT(telegram_id) DO UPDATE SET language=excluded.language""",
+            (telegram_id, lang),
+        )
         await db_.commit()
         return True
 
