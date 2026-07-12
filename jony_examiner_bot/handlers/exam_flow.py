@@ -1032,6 +1032,12 @@ async def idx_confirm(callback: CallbackQuery, state: FSMContext):
                 except Exception:
                     pass
 
+    # Fayl yuborib bo'lingach diskda saqlanib qolmasin — darhol o'chirib tashlaymiz
+    try:
+        os.remove(filename)
+    except OSError:
+        pass
+
     await callback.message.answer(
         "Yangi test kiritish uchun tugmani bosing:",
         reply_markup=build_main_menu_kb("EXAMINER", is_adm),
