@@ -111,6 +111,10 @@ async def _send_staff(send):
             status_label = status_labels.get(u["status"], "")
             lines.append(f"{role_label}: {u['full_name']}{status_label}")
             builder.button(
+                text=f"✏️ {u['full_name']} — ismini o'zgartirish",
+                callback_data=f"edit_name:{u['telegram_id']}",
+            )
+            builder.button(
                 text=f"❌ {u['full_name']} — shu filialdan chiqarish",
                 callback_data=f"remove_staff_branch:{u['telegram_id']}:{branch}",
             )
@@ -123,6 +127,10 @@ async def _send_staff(send):
         for u in study_heads:
             status_label = status_labels.get(u["status"], "")
             lines.append(f"{role_labels['STUDY_HEAD']}: {u['full_name']}{status_label}")
+            builder.button(
+                text=f"✏️ {u['full_name']} — ismini o'zgartirish",
+                callback_data=f"edit_name:{u['telegram_id']}",
+            )
             builder.button(text=f"❌ {u['full_name']} (butunlay)", callback_data=f"remove_staff:{u['id']}")
         builder.adjust(1)
         await send("\n".join(lines), reply_markup=builder.as_markup())
@@ -1005,6 +1013,62 @@ async def reminder_setting_process(message: Message, state: FSMContext):
         return
     await db.set_setting("reminder_hours_before", str(hours))
     await message.answer(f"✅ Endi imtihondan {hours} soat oldin eslatma yuboriladi.")
+
+
+# =========================================================
+# XODIM ISMINI O'ZGARTIRISH
+# =========================================================
+
+@router.callback_query(F.data.startswith("edit_name:"))
+async def edit_name_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+
+    telegram_id = int(callback.data.split(":", 1)[1])
+    user = await db.get_user(telegram_id)
+    if not user:
+        await callback.answer("Bu foydalanuvchi topilmadi (o'chirilgan bo'lishi mumkin).", show_alert=True)
+        return
+
+    await state.update_data(edit_name_telegram_id=telegram_id, edit_name_old=user["full_name"])
+    await state.set_state(AdminStates.edit_name_input)
+    await callback.message.answer(
+        f"Joriy ism: <b>{user['full_name']}</b>\n\nYangi to'liq ismni kiriting:"
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.edit_name_input)
+async def edit_name_save(message: Message, state: FSMContext):
+    new_name = message.text.strip()
+    if not new_name:
+        await message.answer("Ism bo'sh bo'lmasligi kerak. Qaytadan kiriting:")
+        return
+
+    data = await state.get_data()
+    telegram_id = data.get("edit_name_telegram_id")
+    old_name = data.get("edit_name_old")
+    await state.clear()
+
+    user = await db.get_user(telegram_id)
+    if not user:
+        await message.answer("Bu foydalanuvchi topilmadi (o'chirilgan bo'lishi mumkin).")
+        return
+
+    await db.update_user_name(telegram_id, new_name)
+    await message.answer(
+        f"✅ Ism o'zgartirildi: {old_name} → <b>{new_name}</b>",
+        reply_markup=admin_panel_kb(),
+    )
+
+    try:
+        await message.bot.send_message(
+            telegram_id,
+            f"ℹ️ Sizning ismingiz admin tomonidan o'zgartirildi: <b>{new_name}</b>",
+        )
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("remove_staff:"))
