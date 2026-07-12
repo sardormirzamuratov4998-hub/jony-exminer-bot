@@ -1,10 +1,17 @@
 import aiosqlite
 import json
+import os
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-DB_PATH = "jony_bookings.db"
+# Railway'da doimiy (persistent) Volume ulangan bo'lsa, DB_PATH shu Volume papkasiga
+# ko'rsatilishi kerak (masalan: /data/jony_bookings.db) — aks holda har deployda
+# ma'lumot yo'qolib ketadi. Railway "Variables" bo'limiga DB_PATH qo'shing.
+DB_PATH = os.getenv("DB_PATH", "jony_bookings.db")
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
 
 DEFAULT_BRANCHES = ["Zafar", "Bekobod", "Stretinka"]
 DEFAULT_TEST_TYPES = ["UNIT TEST", "END OF COURSE", "MIDTERM"]
