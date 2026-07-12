@@ -1,5 +1,4 @@
 import os
-import shutil
 import sqlite3
 from datetime import datetime
 
@@ -888,7 +887,14 @@ async def restore_db_process(message: Message, state: FSMContext):
         await message.answer("Iltimos, .db kengaytmali fayl yuboring (yoki \"❌ Bekor qilish\"):")
         return
 
-    tmp_path = f"/tmp/restore_{message.from_user.id}.db"
+    # MUHIM: vaqtinchalik faylni DB_PATH bilan BIR XIL papkaga (bir xil disk/Volume)
+    # yozamiz — shundagina pastdagi os.replace() atomik (bitta rename amali) bo'ladi.
+    # Agar /tmp kabi boshqa fayl tizimiga yozib, keyin nusxalasak (shutil.copyfile),
+    # nusxalash bo'lak-bo'lak ketadi: aynan shu daqiqada boshqa filialdan kelgan
+    # buyurtma botni bazaga yozayotgan bo'lsa, u yarim yozilgan (buzilgan) faylni
+    # o'qib/yozib qolishi mumkin edi. os.replace() esa POSIX'da bitta atomik
+    # operatsiya — hech qachon "yarim holat" bo'lmaydi.
+    tmp_path = f"{db.DB_PATH}.restore_tmp_{message.from_user.id}"
     file = await message.bot.get_file(doc.file_id)
     await message.bot.download_file(file.file_path, tmp_path)
 
@@ -913,8 +919,7 @@ async def restore_db_process(message: Message, state: FSMContext):
         )
         return
 
-    shutil.copyfile(tmp_path, db.DB_PATH)
-    os.remove(tmp_path)
+    os.replace(tmp_path, db.DB_PATH)
     await state.clear()
     await message.answer(
         "✅ Baza muvaffaqiyatli tiklandi! Bot shu fayldagi ma'lumotlar bilan davom etadi.\n\n"
