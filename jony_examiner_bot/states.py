@@ -90,3 +90,5 @@ class AdminStates(StatesGroup):
     grading_input = State()
     booking_field_add_input = State()
     edit_name_input = State()
+    broadcast_input = State()
+    broadcast_confirm = State()
