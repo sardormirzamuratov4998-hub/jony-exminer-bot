@@ -6,20 +6,22 @@ from aiogram.fsm.context import FSMContext
 import database as db
 from states import RegStates
 from keyboards import (
+    language_choice_kb,
     role_choice_kb,
     branch_kb,
     build_main_menu_kb,
     admin_only_menu_kb,
     admin_panel_kb,
 )
+from locales import LANGUAGES
 
 router = Router()
 
 
-async def send_menu_for_user(message: Message, user: dict):
-    is_adm = await db.is_admin(message.from_user.id)
+async def send_menu_for_user(answer_func, telegram_id: int, user: dict):
+    is_adm = await db.is_admin(telegram_id)
     if user["role"] == "TEACHER":
-        await message.answer(
+        await answer_func(
             f"Xush kelibsiz, {user['full_name']}! ({user['branch']} filiali)\n\n"
             "Imtihon buyurtma qilish uchun tugmani bosing.\n"
             "(Rolni o'zgartirish: /change_role)",
@@ -27,41 +29,23 @@ async def send_menu_for_user(message: Message, user: dict):
         )
     elif user["role"] == "EXAMINER":
         if user["status"] == "rejected":
-            await message.answer("Afsuski, so'rovingiz rad etilgan. Admin bilan bog'laning.")
+            await answer_func("Afsuski, so'rovingiz rad etilgan. Admin bilan bog'laning.")
             return
-        await message.answer(
+        await answer_func(
             f"Xush kelibsiz, {user['full_name']}! ({user['branch']} filiali, Examiner)\n\n"
             "Test natijalarini kiritish uchun tugmani bosing. Sizga mos filialdagi "
             "yangi imtihon buyurtmalari haqida ham shu yerda xabar beriladi.\n"
             "(Rolni o'zgartirish: /change_role)",
             reply_markup=build_main_menu_kb("EXAMINER", is_adm),
         )
-    elif user["role"] == "STUDY_HEAD":
-        await message.answer(
-            f"Xush kelibsiz, {user['full_name']}! (O'quv bo'lim rahbari)\n\n"
-            "END OF COURSE va MIDTERM turidagi buyurtmalar hamda natijalar (Excel) "
-            "filialdan qat'iy nazar shu yerga avtomatik yuboriladi.\n"
-            "(Rolni o'zgartirish: /change_role)",
-            reply_markup=build_main_menu_kb("STUDY_HEAD", is_adm),
-        )
 
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    user = await db.get_user(message.from_user.id)
-    if user:
-        if user["status"] == "removed":
-            await message.answer(
-                "Sizning hisobingiz admin tomonidan o'chirilgan. Savol uchun admin bilan bog'laning."
-            )
-            return
-        await send_menu_for_user(message, user)
-        return
-
-    is_adm = await db.is_admin(message.from_user.id)
+async def _prompt_role_or_admin(answer_func, telegram_id: int, state: FSMContext):
+    """Til tanlangandan keyin (yoki allaqachon tanlangan bo'lsa) davom etadigan qism:
+    admin bo'lsa — admin xush kelibsiz xabari, bo'lmasa — rol tanlash oqimi."""
+    is_adm = await db.is_admin(telegram_id)
     if is_adm:
-        await message.answer(
+        await answer_func(
             "👋 Siz <b>ADMIN</b> sifatida belgilangansiz!\n\n"
             "Pastdagi tugma orqali admin panelga kirishingiz mumkin.\n\n"
             "Agar bundan tashqari Ustoz yoki Examiner sifatida ham ro'yxatdan "
@@ -71,10 +55,70 @@ async def cmd_start(message: Message, state: FSMContext):
         return
 
     await state.set_state(RegStates.choose_role)
-    await message.answer(
+    await answer_func(
         "Assalomu alaykum! 👋\n<b>Jony Academy Bot</b>ga xush kelibsiz.\n\n"
         "Avval ro'yxatdan o'tamiz. Siz kimsiz?",
         reply_markup=role_choice_kb(),
+    )
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    telegram_id = message.from_user.id
+    user = await db.get_user(telegram_id)
+    if user:
+        if user["status"] == "removed":
+            await message.answer(
+                "Sizning hisobingiz admin tomonidan o'chirilgan. Savol uchun admin bilan bog'laning."
+            )
+            return
+        await send_menu_for_user(message.answer, telegram_id, user)
+        return
+
+    if not await db.has_language_pref(telegram_id):
+        await state.set_state(RegStates.choose_language)
+        await message.answer(
+            "🌐 Tilni tanlang / Выберите язык:",
+            reply_markup=language_choice_kb(),
+        )
+        return
+
+    await _prompt_role_or_admin(message.answer, telegram_id, state)
+
+
+@router.callback_query(F.data.startswith("setlang:"))
+async def set_language_cb(callback: CallbackQuery, state: FSMContext):
+    lang = callback.data.split(":", 1)[1]
+    telegram_id = callback.from_user.id
+    ok = await db.set_user_language(telegram_id, lang)
+    if not ok:
+        await callback.answer("Noma'lum til.", show_alert=True)
+        return
+
+    label = LANGUAGES.get(lang, lang)
+    await callback.message.edit_text(f"✅ {label}")
+
+    current_state = await state.get_state()
+    if current_state == RegStates.choose_language.state:
+        # Ro'yxatdan o'tishning birinchi qadami sifatida til tanlangan edi — davom etamiz
+        await state.clear()
+        await _prompt_role_or_admin(callback.message.answer, telegram_id, state)
+    else:
+        # Mavjud foydalanuvchi/admin tilni asosiy menyudan o'zgartirdi — menyuni qayta ko'rsatamiz
+        user = await db.get_user(telegram_id)
+        if user:
+            await send_menu_for_user(callback.message.answer, telegram_id, user)
+        elif await db.is_admin(telegram_id):
+            await callback.message.answer("Admin panel:", reply_markup=admin_only_menu_kb())
+    await callback.answer()
+
+
+@router.message(F.text == "🌐 Tilni o'zgartirish")
+async def change_language_button(message: Message):
+    await message.answer(
+        "Tilni tanlang / Выберите язык:",
+        reply_markup=language_choice_kb(),
     )
 
 
@@ -114,16 +158,6 @@ async def choose_role(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
         return
 
-    if role == "STUDY_HEAD":
-        if not await db.is_study_head_allowed(callback.from_user.id):
-            await state.clear()
-            await callback.message.edit_text(
-                "Bu lavozimni olish uchun sizga hali admin ruxsat bermagan. "
-                "Admin bilan bog'laning."
-            )
-            await callback.answer()
-            return
-
     await state.update_data(role=role)
     await state.set_state(RegStates.full_name)
     await callback.message.edit_text("Ism va familiyangizni kiriting:")
@@ -133,23 +167,6 @@ async def choose_role(callback: CallbackQuery, state: FSMContext):
 @router.message(RegStates.full_name)
 async def get_full_name(message: Message, state: FSMContext):
     await state.update_data(full_name=message.text)
-    data = await state.get_data()
-
-    if data["role"] == "STUDY_HEAD":
-        telegram_id = message.from_user.id
-        username = message.from_user.username
-        full_name = message.text
-        await db.upsert_user(telegram_id, "STUDY_HEAD", full_name, "Barcha filiallar", "active", username)
-        await state.clear()
-        is_adm = await db.is_admin(telegram_id)
-        await message.answer(
-            f"Ro'yxatdan o'tdingiz ✅\nLavozim: O'quv bo'lim rahbari\n\n"
-            "Endi END OF COURSE va MIDTERM buyurtmalari hamda natijalari (Excel) "
-            "filialdan qat'iy nazar sizga avtomatik yuboriladi.",
-            reply_markup=build_main_menu_kb("STUDY_HEAD", is_adm),
-        )
-        return
-
     await state.set_state(RegStates.choose_branch)
     branches = await db.get_branches()
     await message.answer("Filialingizni tanlang:", reply_markup=branch_kb(branches))
@@ -167,7 +184,7 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
     # Endi ustoz ham, examiner ham darhol faol bo'ladi — admin tasdiqlash shart emas
     status = "active"
     await db.upsert_user(telegram_id, role, full_name, branch, status, username)
-    if role in ("TEACHER", "EXAMINER"):
+    if role == "TEACHER":
         await db.add_teacher_branch(telegram_id, branch)
     await state.clear()
 
@@ -204,7 +221,7 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text == "➕ Filial qo'shish")
 async def add_branch_start(message: Message):
     user = await db.get_user(message.from_user.id)
-    if not user or user["role"] not in ("TEACHER", "EXAMINER") or user["status"] == "removed":
+    if not user or user["role"] != "TEACHER":
         return
     all_branches = await db.get_branches()
     existing = await db.get_teacher_branches(message.from_user.id)
@@ -217,25 +234,8 @@ async def add_branch_start(message: Message):
     )
 
 
-@router.message(F.text == "ℹ️ Yordam")
-async def study_head_help(message: Message):
-    user = await db.get_user(message.from_user.id)
-    if not user or user["role"] != "STUDY_HEAD":
-        return
-    await message.answer(
-        "Siz <b>O'quv bo'lim rahbari</b> sifatida ro'yxatdan o'tgansiz.\n\n"
-        "END OF COURSE va MIDTERM turidagi barcha buyurtmalar, hamda examinerlar "
-        "tomonidan yuborilgan shu turdagi natijalar (Excel) filialdan qat'iy nazar "
-        "avtomatik ravishda shu yerga yuboriladi."
-    )
-
-
 @router.callback_query(F.data.startswith("addbranch:"))
 async def add_branch_confirm(callback: CallbackQuery):
-    user = await db.get_user(callback.from_user.id)
-    if not user or user["role"] not in ("TEACHER", "EXAMINER") or user["status"] == "removed":
-        await callback.answer("Bu amal siz uchun mavjud emas.", show_alert=True)
-        return
     branch = callback.data.split(":", 1)[1]
     await db.add_teacher_branch(callback.from_user.id, branch)
     await callback.message.edit_text(f"✅ {branch} filiali qo'shildi.")
@@ -307,7 +307,7 @@ async def whoami(message: Message):
         return
     lines = []
     if user:
-        branches = await db.get_teacher_branches(message.from_user.id) if user["role"] in ("TEACHER", "EXAMINER") else []
+        branches = await db.get_teacher_branches(message.from_user.id) if user["role"] == "TEACHER" else []
         branch_text = f"\nFiliallar: {', '.join(branches)}" if branches else ""
         lines.append(
             f"Ism: {user['full_name']}\nRol: {user['role']}\n"
