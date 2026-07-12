@@ -883,16 +883,49 @@ async def cancel_booking(booking_id: int):
         await db.commit()
 
 
-async def reschedule_booking(booking_id: int, exam_date: str, exam_time: str):
-    """Buyurtma sanasi/vaqtini o'zgartiradi va eslatma bayroqlarini qayta tiklaydi
-    (shunda eslatmalar yangi vaqtga nisbatan to'g'ri ishlaydi)."""
+async def reschedule_booking(booking_id: int, exam_date: str, exam_time: str,
+                              examiner_telegram_id: int = None) -> str:
+    """Returns 'ok' | 'not_found' | 'conflict'.
+
+    Avvalgi versiyada konflikt tekshiruvi (examiner_has_conflict) va yozish
+    ikki ALOHIDA so'rov edi — xuddi accept_booking'da avval bo'lgani kabi,
+    bitta examinerga biriktirilgan ikkita buyurtma deyarli bir vaqtda bir xil
+    yangi sana/vaqtga ko'chirilsa, ikkalasi ham "muvaffaqiyatli" bo'lib,
+    examiner bitta vaqtga ikkita imtihonga "yozilib" qolishi mumkin edi.
+    Endi (agar booking allaqachon examinerga biriktirilgan bo'lsa) tekshiruv
+    va yozish bitta shartli UPDATE ichida — bo'linmas holda bajariladi."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            """UPDATE bookings SET exam_date=?, exam_time=?,
-               reminder_1h_sent=0, reminder_time_sent=0, escalated=0 WHERE id=?""",
-            (exam_date, exam_time, booking_id),
-        )
+        if examiner_telegram_id is not None:
+            cur = await db.execute(
+                """UPDATE bookings SET exam_date=?, exam_time=?,
+                   reminder_1h_sent=0, reminder_time_sent=0, escalated=0
+                   WHERE id=?
+                   AND NOT EXISTS (
+                       SELECT 1 FROM bookings
+                       WHERE examiner_telegram_id=? AND exam_date=? AND exam_time=?
+                         AND status='accepted' AND id != ?
+                   )""",
+                (
+                    exam_date, exam_time, booking_id,
+                    examiner_telegram_id, exam_date, exam_time, booking_id,
+                ),
+            )
+        else:
+            cur = await db.execute(
+                """UPDATE bookings SET exam_date=?, exam_time=?,
+                   reminder_1h_sent=0, reminder_time_sent=0, escalated=0
+                   WHERE id=?""",
+                (exam_date, exam_time, booking_id),
+            )
         await db.commit()
+        if cur.rowcount > 0:
+            return "ok"
+
+        cur2 = await db.execute("SELECT id FROM bookings WHERE id=?", (booking_id,))
+        row = await cur2.fetchone()
+        if not row:
+            return "not_found"
+        return "conflict"
 
 
 async def expire_past_bookings():
