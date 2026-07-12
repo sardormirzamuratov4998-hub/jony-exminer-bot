@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sqlite3
 from datetime import datetime
@@ -23,6 +24,7 @@ from keyboards import (
     booking_field_manage_kb,
     booking_field_delete_confirm_kb,
     cancel_kb,
+    broadcast_confirm_kb,
 )
 
 router = Router()
@@ -1328,6 +1330,93 @@ async def audit_log_cmd(message: Message):
     if not await _require_admin(message):
         return
     await _send_audit_log(message.answer)
+
+
+# ---------- BARCHAGA XABAR YUBORISH (BROADCAST) ----------
+
+@router.callback_query(F.data == "admin_broadcast")
+async def broadcast_start(callback: CallbackQuery, state: FSMContext):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await state.set_state(AdminStates.broadcast_input)
+    await callback.message.answer(
+        "📢 Hammaga (barcha ustoz, examiner va adminlarga) yuboriladigan xabar matnini kiriting:",
+        reply_markup=cancel_kb(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminStates.broadcast_input, F.text == "❌ Bekor qilish")
+async def broadcast_input_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Bekor qilindi.", reply_markup=admin_panel_kb())
+
+
+@router.message(AdminStates.broadcast_input)
+async def broadcast_input_save(message: Message, state: FSMContext):
+    text = message.text
+    if not text or not text.strip():
+        await message.answer("Iltimos, matn kiriting (yoki \"❌ Bekor qilish\"):")
+        return
+
+    user_ids = await db.get_all_user_ids()
+    await state.update_data(broadcast_text=text)
+    await state.set_state(AdminStates.broadcast_confirm)
+    await message.answer(
+        f"📢 <b>Quyidagi xabar taxminan {len(user_ids)} kishiga yuboriladi:</b>\n\n"
+        f"—————————————\n{text}\n—————————————\n\n"
+        "Yuborishni tasdiqlaysizmi?",
+        reply_markup=broadcast_confirm_kb(),
+    )
+
+
+@router.callback_query(AdminStates.broadcast_confirm, F.data == "broadcast_cancel")
+async def broadcast_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Bekor qilindi. Xabar yuborilmadi.")
+    await callback.message.answer("🛠 Admin panel", reply_markup=admin_panel_kb())
+    await callback.answer()
+
+
+async def _run_broadcast(bot, admin_chat_id: int, text: str):
+    """Fon vazifasi sifatida — Telegram flood-limitiga tushmaslik uchun har
+    xabar orasida kichik pauza bilan, hammaga birma-bir yuboradi. Tugagach,
+    adminga qisqacha natija xabarini yuboradi."""
+    user_ids = await db.get_all_user_ids()
+    sent, failed = 0, 0
+    for telegram_id in user_ids:
+        try:
+            await bot.send_message(telegram_id, text)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    try:
+        await bot.send_message(
+            admin_chat_id,
+            f"✅ Xabar yuborish yakunlandi.\nMuvaffaqiyatli: {sent} ta\nYuborilmadi: {failed} ta",
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(AdminStates.broadcast_confirm, F.data == "broadcast_send")
+async def broadcast_send(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    text = data.get("broadcast_text")
+    await state.clear()
+
+    if not text:
+        await callback.message.edit_text("Xatolik yuz berdi, xabar topilmadi. Qaytadan urinib ko'ring.")
+        await callback.answer()
+        return
+
+    await callback.message.edit_text("📤 Xabar yuborilmoqda... Tugagach sizga natija yoziladi.")
+    await _log_action(callback.from_user, "Barchaga xabar yubordi", text[:200])
+    asyncio.create_task(_run_broadcast(callback.bot, callback.from_user.id, text))
+    await callback.answer()
 
 
 @router.message(Command("admin"))
