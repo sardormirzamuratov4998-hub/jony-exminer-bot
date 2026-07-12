@@ -1,5 +1,5 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
-from locales import LANGUAGES
+from locales import LANGUAGES, t
 
 
 def start_kb():
@@ -133,10 +133,10 @@ def language_choice_kb():
     return builder.as_markup()
 
 
-def role_choice_kb():
+def role_choice_kb(lang: str = "uz"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="👩‍🏫 Men Ustozman", callback_data="role:TEACHER")
-    builder.button(text="🧑‍💼 Men Examinerman", callback_data="role:EXAMINER")
+    builder.button(text=t("role_btn_teacher", lang), callback_data="role:TEACHER")
+    builder.button(text=t("role_btn_examiner", lang), callback_data="role:EXAMINER")
     builder.button(text="🛠 Adminman", callback_data="role:ADMIN")
     builder.adjust(1)
     return builder.as_markup()
@@ -198,29 +198,34 @@ def examiner_approve_kb(telegram_id: int):
     return builder.as_markup()
 
 
-def build_main_menu_kb(role: str = None, is_admin: bool = False):
+def build_main_menu_kb(role: str = None, is_admin: bool = False, lang: str = "uz"):
     """Rolga mos tugma(lar) + agar admin bo'lsa qo'shimcha Admin panel tugmasi.
-    Tilni o'zgartirish tugmasi har doim, har bir xodim uchun ko'rinadi."""
+    Tilni o'zgartirish tugmasi har doim, har bir xodim uchun ko'rinadi.
+
+    Eslatma: Ustoz/Examiner tugmalari (buyurtma, test kiritish va h.k.) hozircha
+    o'zbekcha qoladi — ular booking.py/exam_flow.py dagi F.text filtrlari bilan
+    bog'liq, shu fayllar tarjima qilinadigan 4- va 5-bosqichlarda birga o'giriladi.
+    Admin panel tugmasi har doim o'zbekcha qoladi (6-bosqichda hal qilinadi)."""
     builder = ReplyKeyboardBuilder()
     if role == "TEACHER":
         builder.button(text="📅 Imtihon buyurtma qilish")
         builder.button(text="🔁 avval imtihon topshirgan guruh")
         builder.button(text="📋 Mening buyurtmalarim")
-        builder.button(text="➕ Filial qo'shish")
+        builder.button(text=t("menu_add_branch", lang))
     elif role == "EXAMINER":
         builder.button(text="🆕 Test kiritish")
         builder.button(text="📅 Mening imtihonlarim")
     if is_admin:
         builder.button(text="🛠 Admin panel")
-    builder.button(text="🌐 Tilni o'zgartirish")
+    builder.button(text=t("change_language_button", lang))
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
 
-def admin_only_menu_kb():
+def admin_only_menu_kb(lang: str = "uz"):
     builder = ReplyKeyboardBuilder()
     builder.button(text="🛠 Admin panel")
-    builder.button(text="🌐 Tilni o'zgartirish")
+    builder.button(text=t("change_language_button", lang))
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
