@@ -967,6 +967,13 @@ async def restore_db_process(message: Message, state: FSMContext):
         return
 
     os.replace(tmp_path, db.DB_PATH)
+
+    # MUHIM: tiklangan fayl ESKI (masalan, yangi jadvallar qo'shilishidan oldingi)
+    # backup bo'lishi mumkin. init_db() qayta chaqirilsa, yetishmayotgan jadvallar
+    # ("CREATE TABLE IF NOT EXISTS" orqali) shu faylda avtomatik yaratiladi —
+    # botni qayta ishga tushirmasdan ham sxema yangilanadi.
+    await db.init_db()
+
     await state.clear()
     await _log_action(message.from_user, "Bazani fayldan tikladi (TO'LIQ almashtirdi)")
     await message.answer(
