@@ -733,18 +733,22 @@ async def get_booking(booking_id: int):
 
 
 async def accept_booking(booking_id: int, examiner_telegram_id: int, examiner_name: str) -> bool:
-    """Returns True if successfully accepted (was pending), False if already taken."""
+    """Returns True if successfully accepted (was pending), False if already taken.
+
+    Avval alohida "tekshirish" va "yozish" ikki qadamda edi — ikkita examiner
+    bir vaqtda bossa, ikkalasi ham "muvaffaqiyatli" bo'lishi mumkin edi.
+    Endi bitta shartli UPDATE orqali — faqat HALI HAM status='pending' bo'lsagina
+    yozadi. Baza bunday so'rovlarni navbat bilan bajaradi, shuning uchun ikkinchi
+    examinerning so'rovi kelganda birinchisi allaqachon o'zgartirib bo'lgan bo'ladi
+    va rowcount=0 qaytadi — ya'ni faqat BITTASI muvaffaqiyatli bo'ladi."""
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT status FROM bookings WHERE id=?", (booking_id,))
-        row = await cur.fetchone()
-        if not row or row[0] != "pending":
-            return False
-        await db.execute(
-            "UPDATE bookings SET status='accepted', examiner_telegram_id=?, examiner_name=?, accepted_at=? WHERE id=?",
+        cur = await db.execute(
+            """UPDATE bookings SET status='accepted', examiner_telegram_id=?,
+               examiner_name=?, accepted_at=? WHERE id=? AND status='pending'""",
             (examiner_telegram_id, examiner_name, now_tashkent().isoformat(), booking_id),
         )
         await db.commit()
-        return True
+        return cur.rowcount > 0
 
 
 async def examiner_has_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str) -> bool:
