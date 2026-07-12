@@ -278,6 +278,7 @@ def admin_panel_kb():
     builder.button(text="🔍 Qidiruv", callback_data="admin_search")
     builder.button(text="📈 Statistika (30 kun)", callback_data="admin_stats")
     builder.button(text="👤 Xodimlar (o'chirish)", callback_data="admin_staff")
+    builder.button(text="🚫 O'chirilgan xodimlar (tiklash)", callback_data="admin_removed_staff")
     builder.button(text="🏢 Filiallarni boshqarish", callback_data="admin_branches")
     builder.button(text="🧪 Test turlarini boshqarish", callback_data="admin_test_types")
     builder.button(text="🎯 Baholash chegaralari", callback_data="admin_grading")
