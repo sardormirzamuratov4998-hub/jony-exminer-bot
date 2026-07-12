@@ -353,6 +353,17 @@ async def get_all_staff():
         return [dict(r) for r in rows]
 
 
+async def get_removed_staff():
+    """Admin tomonidan o'chirilgan (qora ro'yxatdagi) foydalanuvchilar — tiklash uchun."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            "SELECT * FROM users WHERE status='removed' ORDER BY full_name"
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_user_by_row_id(user_row_id: int):
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
