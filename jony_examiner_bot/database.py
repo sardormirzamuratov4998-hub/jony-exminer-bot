@@ -110,6 +110,16 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_telegram_id INTEGER NOT NULL,
+                admin_name TEXT,
+                action TEXT NOT NULL,
+                details TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS study_head_allowed (
                 telegram_id INTEGER PRIMARY KEY,
                 full_name TEXT,
@@ -234,6 +244,29 @@ async def list_admins():
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
         cur = await db_.execute("SELECT * FROM admins")
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------- ADMIN AMALLARI TARIXI (AUDIT LOG) ----------
+# Qaysi admin qachon nima o'zgartirish qilgani — boshqa adminlar ko'ra olishi uchun.
+
+async def log_admin_action(admin_telegram_id: int, admin_name: str, action: str, details: str = None):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute(
+            "INSERT INTO admin_actions (admin_telegram_id, admin_name, action, details, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (admin_telegram_id, admin_name, action, details, now_tashkent().isoformat()),
+        )
+        await db_.commit()
+
+
+async def get_admin_actions(limit: int = 30):
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            "SELECT * FROM admin_actions ORDER BY id DESC LIMIT ?", (limit,)
+        )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
