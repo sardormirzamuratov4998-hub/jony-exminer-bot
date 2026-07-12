@@ -472,7 +472,8 @@ async def manage_confirm(callback: CallbackQuery, state: FSMContext):
         return
 
     removed_names = [f"{saved[i]['surname']} {saved[i]['name']}" for i in selected]
-    remaining = await db.remove_students_from_group(branch, group_name, selected)
+    to_remove = [saved[i] for i in selected]
+    remaining = await db.remove_students_from_group(branch, group_name, to_remove)
     await state.update_data(saved_students_available=remaining, manage_selected=[])
 
     text = "✅ Guruhdan o'chirildi:\n" + "\n".join(f"• {n}" for n in removed_names)
