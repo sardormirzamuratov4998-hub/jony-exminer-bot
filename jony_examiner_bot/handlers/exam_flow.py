@@ -113,7 +113,7 @@ async def cancel_flow(message: Message, state: FSMContext):
 @router.message(F.text == "📅 Mening imtihonlarim")
 async def my_schedule(message: Message):
     user = await db.get_user(message.from_user.id)
-    if not user or user["role"] != "EXAMINER":
+    if not user or user["role"] != "EXAMINER" or user["status"] == "removed":
         return
     bookings = await db.get_examiner_upcoming_bookings(message.from_user.id)
     if not bookings:
