@@ -24,6 +24,34 @@ INITIAL_ADMIN_ID = os.getenv("INITIAL_ADMIN_ID")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN topilmadi! .env fayliga yoki Railway Variables ga qo'shing.")
 
+UPDATE_NOTICE_TEXT = (
+    "🔄 Bot yangilandi!\n\n"
+    "/start bosib botni yangilab, ishlashni davom ettirishingiz mumkin."
+)
+
+
+async def _broadcast_update_notice(bot: Bot):
+    """Har deploy (bot qayta ishga tushganda) botdan foydalangan HAMMA odamga
+    \"bot yangilandi\" xabarini yuboradi. Fon vazifasi sifatida ishlaydi —
+    pollingni to'xtatib turmaydi, bitta odamga yuborilmasa (bloklagan bo'lsa)
+    ham qolganlarga davom etadi."""
+    try:
+        user_ids = await db.get_all_user_ids()
+    except Exception:
+        logging.exception("Foydalanuvchilar ro'yxatini o'qib bo'lmadi (update notice)")
+        return
+
+    sent, failed = 0, 0
+    for telegram_id in user_ids:
+        try:
+            await bot.send_message(telegram_id, UPDATE_NOTICE_TEXT)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.05)  # Telegram flood-limitiga tushmaslik uchun sekinlashtirish
+
+    logging.info(f"Yangilanish xabari yuborildi: {sent} ta muvaffaqiyatli, {failed} ta yuborilmadi")
+
 
 async def main():
     await db.init_db()
@@ -55,6 +83,10 @@ async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
     logging.info("Bot ishga tushdi (polling)...")
+
+    # Fon vazifasi sifatida — pollingni kutdirmaydi
+    asyncio.create_task(_broadcast_update_notice(bot))
+
     await dp.start_polling(bot)
 
 
