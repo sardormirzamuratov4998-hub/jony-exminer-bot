@@ -196,22 +196,33 @@ async def reschedule_get_time(message: Message, state: FSMContext):
         return
 
     old_date, old_time = booking["exam_date"], booking["exam_time"]
+    examiner_id = booking.get("examiner_telegram_id") if booking["status"] == "accepted" else None
+    same_datetime = (new_date == old_date and new_time == old_time)
 
-    if booking["status"] == "accepted" and booking.get("examiner_telegram_id"):
-        same_datetime = (new_date == old_date and new_time == old_time)
-        if not same_datetime:
-            conflict = await db.examiner_has_conflict(
-                booking["examiner_telegram_id"], new_date, new_time
+    # Tezkor (do'stona) tekshiruv — aniq javob esa pastdagi bo'linmas UPDATE'dan keladi.
+    if examiner_id and not same_datetime:
+        conflict = await db.examiner_has_conflict(examiner_id, new_date, new_time)
+        if conflict:
+            await message.answer(
+                "Kechirasiz, biriktirilgan examinerda shu yangi sana va vaqtga "
+                "allaqachon boshqa imtihon bor. Boshqa sana/vaqt kiriting, "
+                "yoki /change_role yozib bekor qiling."
             )
-            if conflict:
-                await message.answer(
-                    "Kechirasiz, biriktirilgan examinerda shu yangi sana va vaqtga "
-                    "allaqachon boshqa imtihon bor. Boshqa sana/vaqt kiriting, "
-                    "yoki /change_role yozib bekor qiling."
-                )
-                return
+            return
 
-    await db.reschedule_booking(booking_id, new_date, new_time)
+    result = await db.reschedule_booking(booking_id, new_date, new_time, examiner_id)
+    if result == "conflict":
+        await message.answer(
+            "Kechirasiz, biriktirilgan examinerda shu yangi sana va vaqtga "
+            "allaqachon boshqa imtihon bor. Boshqa sana/vaqt kiriting, "
+            "yoki /change_role yozib bekor qiling."
+        )
+        return
+    if result != "ok":
+        await state.clear()
+        await message.answer("Bu buyurtma endi mavjud emas yoki faol emas.")
+        return
+
     await state.clear()
 
     is_adm = await db.is_admin(message.from_user.id)
