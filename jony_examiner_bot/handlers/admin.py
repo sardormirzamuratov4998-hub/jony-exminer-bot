@@ -81,25 +81,46 @@ async def _send_staff(send):
         await send("Hozircha ro'yxatdan o'tgan xodim yo'q.")
         return
 
+    role_labels = {
+        "TEACHER": "👩‍🏫 Ustoz",
+        "EXAMINER": "🧑‍💼 Examiner",
+        "STUDY_HEAD": "🏫 O'quv bo'lim rahbari",
+    }
+    status_labels = {
+        "active": "", "approved": "", "pending": " (kutilmoqda)", "rejected": " (rad etilgan)",
+    }
+
     by_branch = {}
+    study_heads = []
     for s in staff:
-        by_branch.setdefault(s["branch"], []).append(s)
+        if s["role"] == "STUDY_HEAD":
+            study_heads.append(s)
+            continue
+        branches = await db.get_user_all_branches(s["telegram_id"], s["branch"])
+        for br in branches:
+            by_branch.setdefault(br, []).append(s)
 
     for branch, users in by_branch.items():
         lines = [f"📍 <b>{branch}</b>\n"]
         builder = InlineKeyboardBuilder()
         for u in users:
-            role_labels = {
-                "TEACHER": "👩‍🏫 Ustoz",
-                "EXAMINER": "🧑‍💼 Examiner",
-                "STUDY_HEAD": "🏫 O'quv bo'lim rahbari",
-            }
             role_label = role_labels.get(u["role"], u["role"])
-            status_label = {
-                "active": "", "approved": "", "pending": " (kutilmoqda)", "rejected": " (rad etilgan)",
-            }.get(u["status"], "")
+            status_label = status_labels.get(u["status"], "")
             lines.append(f"{role_label}: {u['full_name']}{status_label}")
-            builder.button(text=f"❌ {u['full_name']}", callback_data=f"remove_staff:{u['id']}")
+            builder.button(
+                text=f"❌ {u['full_name']} — shu filialdan chiqarish",
+                callback_data=f"remove_staff_branch:{u['telegram_id']}:{branch}",
+            )
+        builder.adjust(1)
+        await send("\n".join(lines), reply_markup=builder.as_markup())
+
+    if study_heads:
+        lines = ["📍 <b>O'quv bo'lim rahbarlari</b>\n"]
+        builder = InlineKeyboardBuilder()
+        for u in study_heads:
+            status_label = status_labels.get(u["status"], "")
+            lines.append(f"{role_labels['STUDY_HEAD']}: {u['full_name']}{status_label}")
+            builder.button(text=f"❌ {u['full_name']} (butunlay)", callback_data=f"remove_staff:{u['id']}")
         builder.adjust(1)
         await send("\n".join(lines), reply_markup=builder.as_markup())
 
@@ -906,6 +927,72 @@ async def remove_staff_yes(callback: CallbackQuery):
 async def remove_staff_no(callback: CallbackQuery):
     await callback.message.edit_text("Bekor qilindi.")
     await callback.answer()
+
+
+# ---------- XODIMNI FAQAT BITTA FILIALDAN CHIQARISH ----------
+
+@router.callback_query(F.data.startswith("remove_staff_branch:"))
+async def remove_staff_branch_confirm(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    _, telegram_id_str, branch = callback.data.split(":", 2)
+    telegram_id = int(telegram_id_str)
+    user = await db.get_user(telegram_id)
+    if not user:
+        await callback.answer("Foydalanuvchi topilmadi.", show_alert=True)
+        return
+
+    branches = await db.get_user_all_branches(telegram_id, user["branch"])
+    warn = ""
+    if len(branches) <= 1:
+        warn = "\n\n⚠️ Bu uning YAGONA filiali — chiqarilsa, hisobi butunlay o'chiriladi."
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Ha, chiqarish", callback_data=f"remove_staff_branch_yes:{telegram_id}:{branch}"
+    )
+    builder.button(text="❌ Bekor qilish", callback_data="remove_staff_no")
+    builder.adjust(2)
+    await callback.message.answer(
+        f"<b>{user['full_name']}</b>ni <b>{branch}</b> filialidan chiqarmoqchimisiz?{warn}",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("remove_staff_branch_yes:"))
+async def remove_staff_branch_yes(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    _, telegram_id_str, branch = callback.data.split(":", 2)
+    telegram_id = int(telegram_id_str)
+    user = await db.get_user(telegram_id)
+    if not user:
+        await callback.answer("Topilmadi.", show_alert=True)
+        return
+
+    await db.remove_user_from_branch(telegram_id, branch)
+    await callback.message.edit_text(f"✅ {user['full_name']} — {branch} filialidan chiqarildi.")
+
+    try:
+        after = await db.get_user(telegram_id)
+        if after and after["status"] == "removed":
+            await callback.bot.send_message(
+                telegram_id,
+                f"Sizning hisobingiz admin tomonidan o'chirildi ({branch} — yagona filialingiz edi). "
+                "Savol uchun admin bilan bog'laning.",
+            )
+        else:
+            await callback.bot.send_message(
+                telegram_id,
+                f"ℹ️ Siz admin tomonidan <b>{branch}</b> filialidan chiqarildingiz.",
+            )
+    except Exception:
+        pass
+
+    await callback.answer("Bajarildi")
 
 
 @router.callback_query(F.data.startswith("cancel_booking:"))
