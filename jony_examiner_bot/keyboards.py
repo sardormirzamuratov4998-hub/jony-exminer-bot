@@ -203,6 +203,7 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
         builder.button(text="🆕 Test kiritish")
         builder.button(text="📅 Mening imtihonlarim")
         builder.button(text="🕓 Kutilayotgan buyurtmalar")
+        builder.button(text="➕ Filial qo'shish")
     elif role == "STUDY_HEAD":
         builder.button(text="ℹ️ Yordam")
     if is_admin:
