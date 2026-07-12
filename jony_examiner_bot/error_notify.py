@@ -11,8 +11,9 @@ _MAX_TRACEBACK_CHARS = 3000
 
 async def notify_admin_error(bot, context: str, exc: BaseException):
     """Kutilmagan xatolik yuz berganda:
-    1) har doim logga yozadi (admin_group_id sozlanmagan bo'lsa ham),
-    2) admin_group_id sozlangan bo'lsa, o'sha guruhga qisqacha xabar yuboradi.
+    1) har doim logga yozadi,
+    2) ro'yxatdagi HAR BIR adminga shaxsan (shaxsiy xabar sifatida) qisqacha
+       xabar yuboradi — guruhga emas, to'g'ridan-to'g'ri adminning o'ziga.
 
     `context` — xatolik qayerda yuz berganini bildiruvchi qisqa yorliq,
     masalan: "handler:booking_confirm" yoki "scheduler:check_reminders".
@@ -23,12 +24,12 @@ async def notify_admin_error(bot, context: str, exc: BaseException):
     logger.exception("Xatolik [%s]: %s", context, exc)
 
     try:
-        admin_group_id = await db.get_setting("admin_group_id")
+        admins = await db.list_admins()
     except Exception:
-        logger.exception("admin_group_id ni o'qib bo'lmadi")
+        logger.exception("Adminlar ro'yxatini o'qib bo'lmadi")
         return
 
-    if not admin_group_id:
+    if not admins:
         return
 
     tb_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -43,7 +44,8 @@ async def notify_admin_error(bot, context: str, exc: BaseException):
         f"<pre>{html.escape(tb_text)}</pre>"
     )
 
-    try:
-        await bot.send_message(int(admin_group_id), text)
-    except Exception:
-        logger.exception("Admin guruhga xatolik xabarini yuborib bo'lmadi")
+    for admin in admins:
+        try:
+            await bot.send_message(admin["telegram_id"], text)
+        except Exception:
+            logger.exception("Adminga (%s) xatolik xabarini yuborib bo'lmadi", admin["telegram_id"])
