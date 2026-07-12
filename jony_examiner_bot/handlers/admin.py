@@ -433,6 +433,55 @@ async def staff_list_cb(callback: CallbackQuery):
     await callback.answer()
 
 
+# ---------- O'CHIRILGAN (QORA RO'YXATDAGI) XODIMLARNI TIKLASH ----------
+
+@router.callback_query(F.data == "admin_removed_staff")
+async def removed_staff_list_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+
+    removed = await db.get_removed_staff()
+    if not removed:
+        await callback.message.answer("Hozircha o'chirilgan (qora ro'yxatdagi) xodim yo'q.")
+        await callback.answer()
+        return
+
+    role_labels = {"TEACHER": "👩‍🏫 Ustoz", "EXAMINER": "🧑‍💼 Examiner", "STUDY_HEAD": "🏫 O'quv bo'lim rahbari"}
+    lines = ["🚫 <b>O'chirilgan xodimlar:</b>\n"]
+    builder = InlineKeyboardBuilder()
+    for u in removed:
+        role_label = role_labels.get(u["role"], u["role"])
+        lines.append(f"{role_label}: {u['full_name']} — {u['branch']}")
+        builder.button(text=f"♻️ {u['full_name']}ni tiklash", callback_data=f"restore_staff:{u['id']}")
+    builder.adjust(1)
+    await callback.message.answer("\n".join(lines), reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("restore_staff:"))
+async def restore_staff(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    user_row_id = int(callback.data.split(":")[1])
+    user = await db.get_user_by_row_id(user_row_id)
+    if not user:
+        await callback.answer("Topilmadi.", show_alert=True)
+        return
+
+    await db.reactivate_user_by_row_id(user_row_id)
+    await callback.message.edit_text(f"✅ {user['full_name']} tiklandi. Endi /start bosib kira oladi.")
+    try:
+        await callback.bot.send_message(
+            user["telegram_id"],
+            "✅ Sizning hisobingiz admin tomonidan tiklandi.\n\nEndi /start bosing.",
+        )
+    except Exception:
+        pass
+    await callback.answer("Tiklandi")
+
+
 # ---------- FILIALLARNI BOSHQARISH ----------
 
 @router.callback_query(F.data == "admin_branches")
