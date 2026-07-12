@@ -1,4 +1,5 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+from locales import LANGUAGES
 
 
 def start_kb():
@@ -124,11 +125,18 @@ def cancel_kb():
 
 # ---------- ROLE / BOOKING KEYBOARDS ----------
 
+def language_choice_kb():
+    builder = InlineKeyboardBuilder()
+    for code, label in LANGUAGES.items():
+        builder.button(text=label, callback_data=f"setlang:{code}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def role_choice_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="👩‍🏫 Men Ustozman", callback_data="role:TEACHER")
     builder.button(text="🧑‍💼 Men Examinerman", callback_data="role:EXAMINER")
-    builder.button(text="🏫 O'quv bo'lim rahbariman", callback_data="role:STUDY_HEAD")
     builder.button(text="🛠 Adminman", callback_data="role:ADMIN")
     builder.adjust(1)
     return builder.as_markup()
@@ -191,23 +199,20 @@ def examiner_approve_kb(telegram_id: int):
 
 
 def build_main_menu_kb(role: str = None, is_admin: bool = False):
-    """Rolga mos tugma(lar) + agar admin bo'lsa qo'shimcha Admin panel tugmasi."""
+    """Rolga mos tugma(lar) + agar admin bo'lsa qo'shimcha Admin panel tugmasi.
+    Tilni o'zgartirish tugmasi har doim, har bir xodim uchun ko'rinadi."""
     builder = ReplyKeyboardBuilder()
     if role == "TEACHER":
         builder.button(text="📅 Imtihon buyurtma qilish")
         builder.button(text="🔁 avval imtihon topshirgan guruh")
-        builder.button(text="🕒 Vaqtni ko'chirish")
         builder.button(text="📋 Mening buyurtmalarim")
         builder.button(text="➕ Filial qo'shish")
     elif role == "EXAMINER":
         builder.button(text="🆕 Test kiritish")
         builder.button(text="📅 Mening imtihonlarim")
-        builder.button(text="🕓 Kutilayotgan buyurtmalar")
-        builder.button(text="➕ Filial qo'shish")
-    elif role == "STUDY_HEAD":
-        builder.button(text="ℹ️ Yordam")
     if is_admin:
         builder.button(text="🛠 Admin panel")
+    builder.button(text="🌐 Tilni o'zgartirish")
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
@@ -215,6 +220,7 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
 def admin_only_menu_kb():
     builder = ReplyKeyboardBuilder()
     builder.button(text="🛠 Admin panel")
+    builder.button(text="🌐 Tilni o'zgartirish")
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
@@ -223,26 +229,6 @@ def booking_branch_kb(branches):
     builder = InlineKeyboardBuilder()
     for b in branches:
         builder.button(text=b, callback_data=f"bookbranch:{b}")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def repeat_group_match_kb(matches):
-    """Qisman qidiruvda bir nechta guruh topilsa, tanlov uchun tugmalar (index bo'yicha)."""
-    builder = InlineKeyboardBuilder()
-    for i, name in enumerate(matches):
-        builder.button(text=name, callback_data=f"repeatgroup:{i}")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def reschedule_pick_kb(bookings):
-    """Ustozning ko'chirish mumkin bo'lgan (pending/accepted) buyurtmalari ro'yxati."""
-    builder = InlineKeyboardBuilder()
-    for b in bookings:
-        label = f"{b['exam_date']} {b['exam_time']} — {b['group_name']}"
-        builder.button(text=label, callback_data=f"reschedule_pick:{b['id']}")
-    builder.button(text="❌ Bekor qilish", callback_data="reschedule_cancel")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -278,16 +264,14 @@ def admin_panel_kb():
     builder.button(text="🔍 Qidiruv", callback_data="admin_search")
     builder.button(text="📈 Statistika (30 kun)", callback_data="admin_stats")
     builder.button(text="👤 Xodimlar (o'chirish)", callback_data="admin_staff")
-    builder.button(text="🚫 O'chirilgan xodimlar (tiklash)", callback_data="admin_removed_staff")
-    builder.button(text="📤 Bazani tiklash (fayldan)", callback_data="admin_restore_db")
     builder.button(text="🏢 Filiallarni boshqarish", callback_data="admin_branches")
     builder.button(text="🧪 Test turlarini boshqarish", callback_data="admin_test_types")
     builder.button(text="🎯 Baholash chegaralari", callback_data="admin_grading")
     builder.button(text="📝 Buyurtma maydonlari", callback_data="admin_booking_fields")
     builder.button(text="🛡 Adminlar ro'yxati", callback_data="admin_admins")
     builder.button(text="➕ Admin qo'shish", callback_data="admin_add")
-    builder.button(text="🏫 O'quv bo'lim rahbari ruxsatlari", callback_data="admin_study_heads")
-    builder.button(text="➕ O'quv bo'lim rahbari qo'shish", callback_data="admin_add_study_head")
+    builder.button(text="🎓 O'quv bo'lim rahbarlari", callback_data="admin_dept_heads")
+    builder.button(text="➕ O'quv bo'lim rahbari qo'shish", callback_data="dept_head_add")
     builder.button(text="📊 Kunlik hisobot (hozir)", callback_data="admin_daily_report")
     builder.button(text="📥 Bazani hoziroq yuklab olish", callback_data="admin_backup")
     builder.button(text="⏰ Eslatma vaqti", callback_data="admin_reminder_setting")
@@ -364,5 +348,23 @@ def booking_field_delete_confirm_kb(field_key: str):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Ha, o'chirish", callback_data=f"bookfield_del_yes:{field_key}")
     builder.button(text="❌ Bekor qilish", callback_data="bookfield_del_no")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def dept_head_manage_kb(dept_heads):
+    builder = InlineKeyboardBuilder()
+    for dh in dept_heads:
+        name = dh["full_name"] or str(dh["telegram_id"])
+        builder.button(text=f"🗑 {name}", callback_data=f"depthead_del:{dh['telegram_id']}")
+    builder.button(text="➕ Yangi rahbar qo'shish", callback_data="dept_head_add")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def dept_head_delete_confirm_kb(telegram_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, o'chirish", callback_data=f"depthead_del_yes:{telegram_id}")
+    builder.button(text="❌ Bekor qilish", callback_data="depthead_del_no")
     builder.adjust(2)
     return builder.as_markup()
