@@ -167,7 +167,7 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
     # Endi ustoz ham, examiner ham darhol faol bo'ladi — admin tasdiqlash shart emas
     status = "active"
     await db.upsert_user(telegram_id, role, full_name, branch, status, username)
-    if role == "TEACHER":
+    if role in ("TEACHER", "EXAMINER"):
         await db.add_teacher_branch(telegram_id, branch)
     await state.clear()
 
@@ -204,7 +204,7 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text == "➕ Filial qo'shish")
 async def add_branch_start(message: Message):
     user = await db.get_user(message.from_user.id)
-    if not user or user["role"] != "TEACHER":
+    if not user or user["role"] not in ("TEACHER", "EXAMINER"):
         return
     all_branches = await db.get_branches()
     existing = await db.get_teacher_branches(message.from_user.id)
@@ -303,7 +303,7 @@ async def whoami(message: Message):
         return
     lines = []
     if user:
-        branches = await db.get_teacher_branches(message.from_user.id) if user["role"] == "TEACHER" else []
+        branches = await db.get_teacher_branches(message.from_user.id) if user["role"] in ("TEACHER", "EXAMINER") else []
         branch_text = f"\nFiliallar: {', '.join(branches)}" if branches else ""
         lines.append(
             f"Ism: {user['full_name']}\nRol: {user['role']}\n"
