@@ -86,5 +86,6 @@ class AdminStates(StatesGroup):
     reminder_input = State()
     branch_add_input = State()
     testtype_add_input = State()
+    restore_db_upload = State()
     grading_input = State()
     booking_field_add_input = State()
