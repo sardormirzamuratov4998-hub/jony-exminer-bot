@@ -6,10 +6,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import ErrorEvent
 from dotenv import load_dotenv
 
 from handlers import registration, booking, exam_flow, admin
 import database as db
+from error_notify import notify_admin_error
 from scheduler import start_scheduler
 
 load_dotenv()
@@ -35,6 +37,14 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
+
+    @dp.error()
+    async def global_error_handler(event: ErrorEvent):
+        """Handlerlar ichida ushlanmagan har qanday xatolik shu yerga tushadi —
+        bot yiqilib qolmaydi va admin guruhga xabar boradi."""
+        update_id = event.update.update_id if event.update else "?"
+        await notify_admin_error(bot, f"handler (update_id={update_id})", event.exception)
+        return True
 
     dp.include_router(admin.router)
     dp.include_router(registration.router)
