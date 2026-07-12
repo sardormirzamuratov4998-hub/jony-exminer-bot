@@ -440,14 +440,19 @@ async def find_teacher_group_names(telegram_id: int, query: str, limit: int = 8)
 
 
 async def get_examiners_by_branch(branch: str, status: str = "active"):
-    """'active' va eski 'approved' statusli examinerlarni ham qamrab oladi (eski ma'lumotlar bilan mos)."""
+    """'active' va eski 'approved' statusli examinerlarni ham qamrab oladi (eski ma'lumotlar bilan mos).
+    Examinerning ASOSIY filiali (users.branch) yoki qo'shimcha filiallaridan
+    (teacher_branches — ustoz va examiner uchun umumiy) biri mos kelsa yetarli."""
     statuses = ["active", "approved"] if status == "active" else [status]
     placeholders = ",".join("?" * len(statuses))
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
         cur = await db_.execute(
-            f"SELECT * FROM users WHERE role='EXAMINER' AND branch=? AND status IN ({placeholders})",
-            (branch, *statuses),
+            f"""SELECT DISTINCT u.* FROM users u
+                LEFT JOIN teacher_branches tb ON tb.telegram_id = u.telegram_id
+                WHERE u.role='EXAMINER' AND u.status IN ({placeholders})
+                  AND (u.branch=? OR tb.branch=?)""",
+            (*statuses, branch, branch),
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -590,7 +595,7 @@ async def get_booking_field_values(booking_id: int) -> dict:
         return {r[0]: r[1] for r in rows}
 
 
-# ---------- TEACHER BRANCHES (bir nechta filialda ishlash) ----------
+# ---------- TEACHER BRANCHES (bir nechta filialda ishlash — ustoz VA examiner uchun) ----------
 
 async def add_teacher_branch(telegram_id: int, branch: str):
     async with aiosqlite.connect(DB_PATH) as db_:
@@ -608,6 +613,55 @@ async def get_teacher_branches(telegram_id: int):
         )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+
+async def get_user_all_branches(telegram_id: int, primary_branch: str = None):
+    """Foydalanuvchining ASOSIY filiali + qo'shgan barcha qo'shimcha filiallari
+    (dublikatsiz, alifbo tartibida)."""
+    branches = set(await get_teacher_branches(telegram_id))
+    if primary_branch:
+        branches.add(primary_branch)
+    return sorted(branches)
+
+
+async def remove_user_from_branch(telegram_id: int, branch: str):
+    """Foydalanuvchini faqat KO'RSATILGAN filialdan chiqaradi.
+    - Agar bu uning yagona filiali bo'lsa — hisobi butunlay 'removed' qilinadi.
+    - Agar bu uning ASOSIY filiali bo'lib, boshqa qo'shimcha filiallari ham bo'lsa —
+      qolgan filiallardan biri yangi asosiy filial qilib belgilanadi."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
+        row = await cur.fetchone()
+        if not row:
+            return
+        user = dict(row)
+
+        cur2 = await db_.execute(
+            "SELECT branch FROM teacher_branches WHERE telegram_id=? ORDER BY branch", (telegram_id,)
+        )
+        extra_branches = [r[0] for r in await cur2.fetchall()]
+
+        remaining = set(extra_branches)
+        remaining.add(user["branch"])
+        remaining.discard(branch)
+
+        if not remaining:
+            await db_.execute("UPDATE users SET status='removed' WHERE telegram_id=?", (telegram_id,))
+        else:
+            await db_.execute(
+                "DELETE FROM teacher_branches WHERE telegram_id=? AND branch=?", (telegram_id, branch)
+            )
+            if user["branch"] == branch:
+                new_primary = sorted(remaining)[0]
+                await db_.execute(
+                    "UPDATE users SET branch=? WHERE telegram_id=?", (new_primary, telegram_id)
+                )
+                await db_.execute(
+                    "DELETE FROM teacher_branches WHERE telegram_id=? AND branch=?",
+                    (telegram_id, new_primary),
+                )
+        await db_.commit()
 
 
 # ---------- BOOKINGS ----------
