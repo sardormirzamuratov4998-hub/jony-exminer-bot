@@ -668,12 +668,18 @@ async def remove_user_from_branch(telegram_id: int, branch: str):
     """Foydalanuvchini faqat KO'RSATILGAN filialdan chiqaradi.
     - Agar bu uning yagona filiali bo'lsa — hisobi butunlay 'removed' qilinadi.
     - Agar bu uning ASOSIY filiali bo'lib, boshqa qo'shimcha filiallari ham bo'lsa —
-      qolgan filiallardan biri yangi asosiy filial qilib belgilanadi."""
+      qolgan filiallardan biri yangi asosiy filial qilib belgilanadi.
+
+    BEGIN IMMEDIATE bilan boshlanadi — bir necha admin AYNAN BIR xodimni bir vaqtda
+    boshqa-boshqa filiallardan chiqarmoqchi bo'lsa ham, bu amal bo'linmas bajariladi
+    (o'qish+hisoblash+yozish oralig'ida boshqa yozuv kirib qolmaydi)."""
     async with aiosqlite.connect(DB_PATH) as db_:
         db_.row_factory = aiosqlite.Row
+        await db_.execute("BEGIN IMMEDIATE")
         cur = await db_.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
         row = await cur.fetchone()
         if not row:
+            await db_.rollback()
             return
         user = dict(row)
 
@@ -732,23 +738,41 @@ async def get_booking(booking_id: int):
         return dict(row) if row else None
 
 
-async def accept_booking(booking_id: int, examiner_telegram_id: int, examiner_name: str) -> bool:
-    """Returns True if successfully accepted (was pending), False if already taken.
+async def accept_booking(booking_id: int, examiner_telegram_id: int, examiner_name: str,
+                          exam_date: str, exam_time: str) -> str:
+    """Returns 'ok' | 'taken' | 'conflict'.
 
-    Avval alohida "tekshirish" va "yozish" ikki qadamda edi — ikkita examiner
-    bir vaqtda bossa, ikkalasi ham "muvaffaqiyatli" bo'lishi mumkin edi.
-    Endi bitta shartli UPDATE orqali — faqat HALI HAM status='pending' bo'lsagina
-    yozadi. Baza bunday so'rovlarni navbat bilan bajaradi, shuning uchun ikkinchi
-    examinerning so'rovi kelganda birinchisi allaqachon o'zgartirib bo'lgan bo'ladi
-    va rowcount=0 qaytadi — ya'ni faqat BITTASI muvaffaqiyatli bo'ladi."""
+    Avval "band emasmi" tekshiruvi (examiner_has_conflict) va "qabul qilish" ikki
+    ALOHIDA so'rov edi — bitta examiner ikkita bir xil vaqtga to'g'ri keladigan
+    buyurtmani deyarli bir vaqtda qabul qilsa, ikkalasi ham "muvaffaqiyatli"
+    bo'lib, u bitta vaqtga ikkita imtihonga "yozilib" qolishi mumkin edi.
+    Endi ikkala tekshiruv (band emasligi VA zid kelmasligi) bitta shartli UPDATE
+    ichida — bo'linmas holda bajariladi."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """UPDATE bookings SET status='accepted', examiner_telegram_id=?,
-               examiner_name=?, accepted_at=? WHERE id=? AND status='pending'""",
-            (examiner_telegram_id, examiner_name, now_tashkent().isoformat(), booking_id),
+               examiner_name=?, accepted_at=?
+               WHERE id=? AND status='pending'
+               AND NOT EXISTS (
+                   SELECT 1 FROM bookings
+                   WHERE examiner_telegram_id=? AND exam_date=? AND exam_time=? AND status='accepted'
+               )""",
+            (
+                examiner_telegram_id, examiner_name, now_tashkent().isoformat(),
+                booking_id, examiner_telegram_id, exam_date, exam_time,
+            ),
         )
         await db.commit()
-        return cur.rowcount > 0
+        if cur.rowcount > 0:
+            return "ok"
+
+        # Nima uchun muvaffaqiyatsiz bo'lganini aniqlaymiz — foydalanuvchiga
+        # to'g'ri xabar ko'rsatish uchun.
+        cur2 = await db.execute("SELECT status FROM bookings WHERE id=?", (booking_id,))
+        row = await cur2.fetchone()
+        if row and row[0] == "pending":
+            return "conflict"
+        return "taken"
 
 
 async def examiner_has_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str) -> bool:
