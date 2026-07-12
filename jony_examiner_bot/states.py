@@ -89,3 +89,4 @@ class AdminStates(StatesGroup):
     restore_db_upload = State()
     grading_input = State()
     booking_field_add_input = State()
+    edit_name_input = State()
