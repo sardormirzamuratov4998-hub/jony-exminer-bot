@@ -43,6 +43,35 @@ async def _require_admin(message: Message) -> bool:
     return True
 
 
+async def _log_action(from_user, action: str, details: str = None):
+    """Qaysi admin nima o'zgartirish qilganini audit logga yozadi.
+    from_user — callback.from_user yoki message.from_user (aiogram User)."""
+    user = await db.get_user(from_user.id)
+    name = (user["full_name"] if user else None) or from_user.full_name or str(from_user.id)
+    await db.log_admin_action(from_user.id, name, action, details)
+
+
+async def _send_audit_log(send):
+    actions = await db.get_admin_actions(30)
+    if not actions:
+        await send("Hozircha hech qanday admin amali qayd etilmagan.")
+        return
+    lines = ["📜 <b>Adminlar amallari tarixi (oxirgi 30 ta):</b>\n"]
+    for a in actions:
+        try:
+            when = datetime.fromisoformat(a["created_at"]).strftime("%d.%m.%Y %H:%M")
+        except ValueError:
+            when = a["created_at"]
+        line = f"🕒 {when} — <b>{a['admin_name']}</b>: {a['action']}"
+        if a.get("details"):
+            line += f" ({a['details']})"
+        lines.append(line)
+    text = "\n".join(lines)
+    if len(text) > 3800:
+        text = text[:3800] + "\n\n... (davomi bor, ko'proq uchun bazani ko'ring)"
+    await send(text)
+
+
 # ---------- YORDAMCHI FUNKSIYALAR (komanda va tugma ikkalasida ham ishlatiladi) ----------
 
 async def _send_pending(send):
@@ -222,6 +251,7 @@ async def set_admin_group(message: Message):
         await message.answer("Bu komanda faqat guruhda ishlaydi.")
         return
     await db.set_setting("admin_group_id", str(message.chat.id))
+    await _log_action(message.from_user, "Admin guruhni sozladi", str(message.chat.id))
     await message.answer(f"✅ Bu guruh admin guruh sifatida belgilandi.\nChat ID: {message.chat.id}")
 
 
@@ -269,6 +299,7 @@ async def add_admin_process(message: Message, state: FSMContext):
         return
 
     await db.add_admin(target_id, target_name, target_username, added_by=message.from_user.id)
+    await _log_action(message.from_user, "Admin qo'shdi", f"{target_name or ''} ({target_id})".strip())
     await message.answer(f"✅ {target_name or target_id} admin sifatida qo'shildi.")
     try:
         await message.bot.send_message(
@@ -290,6 +321,7 @@ async def remove_admin_cmd(message: Message):
         return
     target_id = int(parts[1])
     await db.remove_admin(target_id)
+    await _log_action(message.from_user, "Adminlikdan chiqardi", str(target_id))
     await message.answer(f"✅ {target_id} adminlikdan olib tashlandi.")
 
 
@@ -353,6 +385,10 @@ async def add_study_head_process(message: Message, state: FSMContext):
         return
 
     await db.add_study_head_allowed(target_id, target_name, target_username, added_by=message.from_user.id)
+    await _log_action(
+        message.from_user, "O'quv bo'lim rahbari ruxsati berdi",
+        f"{target_name or ''} ({target_id})".strip(),
+    )
     await message.answer(
         f"✅ {target_name or target_id} uchun O'quv bo'lim rahbari lavozimini olish ruxsati berildi."
     )
@@ -376,6 +412,7 @@ async def remove_study_head_cmd(message: Message):
         return
     target_id = int(parts[1])
     await db.remove_study_head_allowed(target_id)
+    await _log_action(message.from_user, "O'quv bo'lim rahbari ruxsatini olib tashladi", str(target_id))
     await message.answer(f"✅ {target_id} uchun O'quv bo'lim rahbari ruxsati olib tashlandi.")
 
 
@@ -481,6 +518,7 @@ async def restore_staff(callback: CallbackQuery):
         return
 
     await db.reactivate_user_by_row_id(user_row_id)
+    await _log_action(callback.from_user, "Xodimni tikladi", user["full_name"])
     await callback.message.edit_text(f"✅ {user['full_name']} tiklandi. Endi /start bosib kira oladi.")
     try:
         await callback.bot.send_message(
@@ -535,6 +573,7 @@ async def branch_add_save(message: Message, state: FSMContext):
         f"✅ \"{name}\" filiali qo'shildi.",
         reply_markup=branch_manage_kb(branches),
     )
+    await _log_action(message.from_user, "Filial qo'shdi", name)
 
 
 @router.callback_query(F.data.startswith("branch_del:"))
@@ -559,6 +598,7 @@ async def branch_delete_yes(callback: CallbackQuery):
         return
     name = callback.data.split(":", 1)[1]
     await db.remove_branch(name)
+    await _log_action(callback.from_user, "Filialni o'chirdi", name)
     branches = await db.get_branches()
     await callback.message.edit_text(f"✅ \"{name}\" filiali o'chirildi.")
     await callback.message.answer(
@@ -618,6 +658,7 @@ async def test_type_add_save(message: Message, state: FSMContext):
         f"✅ \"{name}\" test turi qo'shildi.",
         reply_markup=test_type_manage_kb(test_types),
     )
+    await _log_action(message.from_user, "Test turi qo'shdi", name)
 
 
 @router.callback_query(F.data.startswith("testtype_del:"))
@@ -642,6 +683,7 @@ async def test_type_delete_yes(callback: CallbackQuery):
         return
     name = callback.data.split(":", 1)[1]
     await db.remove_test_type(name)
+    await _log_action(callback.from_user, "Test turini o'chirdi", name)
     test_types = await db.get_test_types()
     await callback.message.edit_text(f"✅ \"{name}\" test turi o'chirildi.")
     await callback.message.answer(
@@ -710,6 +752,7 @@ async def grading_edit_save(message: Message, state: FSMContext):
         await message.answer("Noto'g'ri qiymat. 0 dan 100 gacha son kiriting (masalan: 90):")
         return
     await db.set_grading_threshold(key, value)
+    await _log_action(message.from_user, "Baholash chegarasini o'zgartirdi", f"{GRADING_LABELS[key]} → {value}%")
     await state.clear()
     thresholds = await db.get_grading_thresholds()
     await message.answer(
@@ -765,6 +808,7 @@ async def booking_field_add_save(message: Message, state: FSMContext):
         f"✅ \"{label}\" maydoni qo'shildi. Endi ustozlar buyurtma berayotganda shu maydon ham so'raladi.",
         reply_markup=booking_field_manage_kb(fields),
     )
+    await _log_action(message.from_user, "Buyurtma maydonini qo'shdi", label)
 
 
 @router.callback_query(F.data.startswith("bookfield_del:"))
@@ -790,7 +834,10 @@ async def booking_field_delete_yes(callback: CallbackQuery):
         await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
         return
     field_key = callback.data.split(":", 1)[1]
+    fields_before = {f["field_key"]: f["label"] for f in await db.get_booking_fields()}
+    label = fields_before.get(field_key, field_key)
     await db.remove_booking_field(field_key)
+    await _log_action(callback.from_user, "Buyurtma maydonini o'chirdi", label)
     fields = await db.get_booking_fields()
     await callback.message.edit_text("✅ Maydon o'chirildi.")
     await callback.message.answer(
@@ -921,6 +968,7 @@ async def restore_db_process(message: Message, state: FSMContext):
 
     os.replace(tmp_path, db.DB_PATH)
     await state.clear()
+    await _log_action(message.from_user, "Bazani fayldan tikladi (TO'LIQ almashtirdi)")
     await message.answer(
         "✅ Baza muvaffaqiyatli tiklandi! Bot shu fayldagi ma'lumotlar bilan davom etadi.\n\n"
         "ℹ️ Agar Railway'da hali doimiy Volume ulanmagan bo'lsa, keyingi safar kod "
@@ -1017,6 +1065,7 @@ async def reminder_setting_process(message: Message, state: FSMContext):
         await message.answer("Noto'g'ri qiymat. Faqat musbat son kiriting (masalan: 1 yoki 0.5):")
         return
     await db.set_setting("reminder_hours_before", str(hours))
+    await _log_action(message.from_user, "Eslatma vaqtini o'zgartirdi", f"{hours} soat oldin")
     await message.answer(f"✅ Endi imtihondan {hours} soat oldin eslatma yuboriladi.")
 
 
@@ -1062,6 +1111,7 @@ async def edit_name_save(message: Message, state: FSMContext):
         return
 
     await db.update_user_name(telegram_id, new_name)
+    await _log_action(message.from_user, "Xodim ismini o'zgartirdi", f"{old_name} → {new_name}")
     await message.answer(
         f"✅ Ism o'zgartirildi: {old_name} → <b>{new_name}</b>",
         reply_markup=admin_panel_kb(),
@@ -1107,6 +1157,7 @@ async def remove_staff_yes(callback: CallbackQuery):
     user_row_id = int(callback.data.split(":")[1])
     user = await db.get_user_by_row_id(user_row_id)
     await db.deactivate_user_by_row_id(user_row_id)
+    await _log_action(callback.from_user, "Xodimni butunlay o'chirdi", user["full_name"])
     await callback.message.edit_text(f"✅ {user['full_name']} ro'yxatdan o'chirildi.")
     try:
         await callback.bot.send_message(
@@ -1169,6 +1220,7 @@ async def remove_staff_branch_yes(callback: CallbackQuery):
         return
 
     await db.remove_user_from_branch(telegram_id, branch)
+    await _log_action(callback.from_user, "Xodimni filialdan chiqardi", f"{user['full_name']} — {branch}")
     await callback.message.edit_text(f"✅ {user['full_name']} — {branch} filialidan chiqarildi.")
 
     try:
@@ -1221,6 +1273,10 @@ async def cancel_booking_yes(callback: CallbackQuery):
     booking_id = int(callback.data.split(":")[1])
     booking = await db.get_booking(booking_id)
     await db.cancel_booking(booking_id)
+    await _log_action(
+        callback.from_user, "Buyurtmani bekor qildi",
+        f"{booking['teacher_name']} — {booking['exam_date']} {booking['exam_time']}",
+    )
     await callback.message.edit_text("✅ Buyurtma bekor qilindi.")
 
     try:
@@ -1249,6 +1305,22 @@ async def cancel_booking_yes(callback: CallbackQuery):
 async def cancel_booking_no(callback: CallbackQuery):
     await callback.message.edit_text("Bekor qilinmadi.")
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_audit_log")
+async def audit_log_cb(callback: CallbackQuery):
+    if not await db.is_admin(callback.from_user.id):
+        await callback.answer("Bu tugma faqat adminlar uchun.", show_alert=True)
+        return
+    await _send_audit_log(callback.message.answer)
+    await callback.answer()
+
+
+@router.message(Command("audit_log"))
+async def audit_log_cmd(message: Message):
+    if not await _require_admin(message):
+        return
+    await _send_audit_log(message.answer)
 
 
 @router.message(Command("admin"))
