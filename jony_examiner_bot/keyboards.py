@@ -293,6 +293,15 @@ def admin_panel_kb():
     builder.button(text="⏰ Eslatma vaqti", callback_data="admin_reminder_setting")
     builder.button(text="ℹ️ Admin guruh sozlash", callback_data="admin_group_info")
     builder.button(text="📜 Amallar tarixi (audit log)", callback_data="admin_audit_log")
+    builder.button(text="📢 Barchaga xabar yuborish", callback_data="admin_broadcast")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def broadcast_confirm_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha, hammaga yuborish", callback_data="broadcast_send")
+    builder.button(text="❌ Bekor qilish", callback_data="broadcast_cancel")
     builder.adjust(1)
     return builder.as_markup()
 
