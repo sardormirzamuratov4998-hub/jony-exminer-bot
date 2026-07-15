@@ -212,6 +212,7 @@ def build_main_menu_kb(role: str = None, is_admin: bool = False):
         builder.button(text="🆕 Test kiritish")
         builder.button(text="📅 Mening imtihonlarim")
         builder.button(text="🕓 Kutilayotgan buyurtmalar")
+        builder.button(text="⏳ Vaqtni surish so'rash")
         builder.button(text="➕ Filial qo'shish")
     elif role == "STUDY_HEAD":
         builder.button(text="ℹ️ Yordam")
@@ -253,6 +254,27 @@ def reschedule_pick_kb(bookings):
         builder.button(text=label, callback_data=f"reschedule_pick:{b['id']}")
     builder.button(text="❌ Bekor qilish", callback_data="reschedule_cancel")
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def postpone_pick_kb(bookings):
+    """Examinerning qabul qilgan (accepted) buyurtmalari — qaysinisining
+    vaqtini surish so'ralayotganini tanlash uchun."""
+    builder = InlineKeyboardBuilder()
+    for b in bookings:
+        label = f"{b['exam_date']} {b['exam_time']} — {b['group_name']}"
+        builder.button(text=label, callback_data=f"postpone_pick:{b['id']}")
+    builder.button(text="❌ Bekor qilish", callback_data="postpone_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def postpone_confirm_kb(booking_id: int):
+    """Ustozga: examiner imtihon vaqtini surishni so'rayapti, rozimisiz?"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha", callback_data=f"postpone_yes:{booking_id}")
+    builder.button(text="❌ Yo'q", callback_data=f"postpone_no:{booking_id}")
+    builder.adjust(2)
     return builder.as_markup()
 
 
