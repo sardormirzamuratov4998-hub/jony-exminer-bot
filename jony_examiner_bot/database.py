@@ -869,6 +869,38 @@ def add_minutes_to_time(time_str: str, minutes: int) -> str:
 
 SOFT_CONFLICT_BUFFER_MINUTES = 80  # 1 soat 20 daqiqa
 
+EOC_TEST_TYPES = ("END OF COURSE", "MIDTERM")
+EOC_DURATION_MINUTES = 120       # END OF COURSE / MIDTERM 2 soat davom etadi deb hisoblanadi
+EOC_NEGOTIATION_WINDOW_MINUTES = 60  # tugashiga shu daqiqadan kam qolgan bo'lsa — so'rov yuboriladi
+
+
+async def examiner_eoc_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str):
+    """Examinerning shu kuni qabul qilingan END OF COURSE / MIDTERM imtihoni bo'lsa
+    (filialdan qat'iy nazar — bu imtihon 2 soat davom etadi deb hisoblanadi) va
+    yangi buyurtma vaqti o'sha 2 soatlik oraliqqa to'g'ri kelib qolsa, tegishli
+    buyurtmani va imtihon tugashigacha necha daqiqa qolganini qaytaradi.
+    Natija: (conflicting_booking, remaining_minutes) yoki (None, None)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" for _ in EOC_TEST_TYPES)
+        cur = await db.execute(
+            f"""SELECT * FROM bookings
+                WHERE examiner_telegram_id=? AND exam_date=? AND status='accepted'
+                AND test_type IN ({placeholders})""",
+            (examiner_telegram_id, exam_date, *EOC_TEST_TYPES),
+        )
+        rows = await cur.fetchall()
+
+    new_dt = datetime.strptime(exam_time, "%H:%M")
+    for row in rows:
+        b = dict(row)
+        start_dt = datetime.strptime(b["exam_time"], "%H:%M")
+        finish_dt = start_dt + timedelta(minutes=EOC_DURATION_MINUTES)
+        if start_dt <= new_dt < finish_dt:
+            remaining = int((finish_dt - new_dt).total_seconds() // 60)
+            return b, remaining
+    return None, None
+
 
 async def examiner_soft_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str, branch: str):
     """Examinerning O'SHA KUNI, BOSHQA filialda, yangi buyurtma vaqtiga 1soat20min
