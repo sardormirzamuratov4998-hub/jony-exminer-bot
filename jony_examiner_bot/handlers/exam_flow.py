@@ -105,7 +105,9 @@ async def start_exam(message: Message, state: FSMContext):
 async def cancel_flow(message: Message, state: FSMContext):
     await state.clear()
     is_adm = await db.is_admin(message.from_user.id)
-    await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb("EXAMINER", is_adm))
+    user = await db.get_user(message.from_user.id)
+    role = user["role"] if user else None
+    await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb(role, is_adm))
 
 
 # ---------- MENING IMTIHONLARIM ----------
