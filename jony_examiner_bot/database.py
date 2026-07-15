@@ -740,6 +740,16 @@ async def add_teacher_branch(telegram_id: int, branch: str):
         await db_.commit()
 
 
+async def clear_teacher_branches(telegram_id: int):
+    """Foydalanuvchi qaytadan ro'yxatdan o'tganda (yangi ro'yxatdan o'tish yoki
+    /change_role) eski (boshqa rol/sessiyadan qolgan) filial biriktirmalarini
+    tozalaydi — aks holda eski filiallar yangi rolga ham 'yopishib qolaveradi'
+    (masalan '➕ Filial qo'shish' ro'yxatida sababsiz yo'qolib qoladi)."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        await db_.execute("DELETE FROM teacher_branches WHERE telegram_id=?", (telegram_id,))
+        await db_.commit()
+
+
 async def get_teacher_branches(telegram_id: int):
     async with aiosqlite.connect(DB_PATH) as db_:
         cur = await db_.execute(
