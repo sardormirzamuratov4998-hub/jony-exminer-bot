@@ -7,7 +7,7 @@ from aiogram.fsm.state import State
 from aiogram.filters import StateFilter
 
 import database as db
-from states import BookingStates
+from states import BookingStates, PostponeStates
 from keyboards import (
     test_type_booking_kb,
     booking_confirm_kb,
@@ -20,6 +20,8 @@ from keyboards import (
     repeat_group_match_kb,
     reschedule_pick_kb,
     REPEAT_FIELD_ORDER,
+    postpone_pick_kb,
+    postpone_confirm_kb,
 )
 
 router = Router()
@@ -28,6 +30,11 @@ router = Router()
 async def _is_teacher(telegram_id: int):
     user = await db.get_user(telegram_id)
     return user if user and user["role"] == "TEACHER" and user["status"] != "removed" else None
+
+
+async def _is_examiner(telegram_id: int):
+    user = await db.get_user(telegram_id)
+    return user if user and user["role"] == "EXAMINER" and user["status"] in ("active", "approved") else None
 
 
 # Foydalanuvchi erkin matn kiritadigan (va shu sabab cancel_kb() ko'rsatiladigan)
@@ -42,6 +49,9 @@ _FREE_TEXT_BOOKING_STATES = [
     BookingStates.repeat_exam_date,
     BookingStates.repeat_exam_time,
     BookingStates.repeat_students_count,
+    PostponeStates.reason,
+    PostponeStates.new_date,
+    PostponeStates.new_time,
 ]
 
 
@@ -959,3 +969,263 @@ async def get_repeat_students_count(message: Message, state: FSMContext):
         return
     await state.update_data(students_count=int(message.text.strip()))
     await _advance_repeat_queue(message.answer, message.from_user.id, state)
+
+
+# =========================================================
+# EXAMINER: QABUL QILGAN IMTIHON VAQTINI SURISH SO'ROVI
+# =========================================================
+# Examiner o'zi qabul qilgan (accepted) imtihonning vaqtini surishni so'raydi:
+# sabab (ustozga xabar sifatida) + surish mumkin bo'lgan yangi sana/vaqt.
+# Ustozga Ha/Yo'q so'raladi:
+#   Ha  -> imtihon o'sha examinerda qoladi, faqat sana/vaqt yangilanadi.
+#   Yo'q -> imtihon o'sha examinerdan yechiladi va BARCHA examinerlarga
+#           yana bo'sh (ochiq) buyurtma sifatida e'lon qilinadi.
+
+@router.message(F.text == "⏳ Vaqtni surish so'rash")
+async def start_postpone_request(message: Message, state: FSMContext):
+    user = await _is_examiner(message.from_user.id)
+    if not user:
+        return
+
+    bookings = await db.get_examiner_upcoming_bookings(message.from_user.id)
+    if not bookings:
+        await message.answer("Sizda hozircha vaqtini surish mumkin bo'lgan qabul qilingan imtihon yo'q.")
+        return
+
+    await state.set_state(PostponeStates.pick_booking)
+    await message.answer(
+        "Qaysi imtihonning vaqtini surishni so'ramoqchisiz?",
+        reply_markup=postpone_pick_kb(bookings),
+    )
+
+
+@router.callback_query(PostponeStates.pick_booking, F.data == "postpone_cancel")
+async def postpone_pick_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    is_adm = await db.is_admin(callback.from_user.id)
+    await callback.message.edit_text("Bekor qilindi.")
+    await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("EXAMINER", is_adm))
+    await callback.answer()
+
+
+@router.callback_query(PostponeStates.pick_booking, F.data.startswith("postpone_pick:"))
+async def postpone_pick(callback: CallbackQuery, state: FSMContext):
+    booking_id = int(callback.data.split(":", 1)[1])
+    booking = await db.get_booking(booking_id)
+    if (
+        not booking
+        or booking["status"] != "accepted"
+        or booking["examiner_telegram_id"] != callback.from_user.id
+    ):
+        await callback.answer("Bu imtihon endi mavjud emas.", show_alert=True)
+        return
+
+    await state.update_data(postpone_booking_id=booking_id)
+    await state.set_state(PostponeStates.reason)
+    await callback.message.edit_text(
+        f"Tanlandi: {booking['exam_date']} {booking['exam_time']} — {booking['group_name']}\n\n"
+        "Sababini yozing (bu xabar ustozga yuboriladi):"
+    )
+    await callback.message.answer("Yozing 👇", reply_markup=cancel_kb())
+    await callback.answer()
+
+
+@router.message(PostponeStates.reason)
+async def postpone_get_reason(message: Message, state: FSMContext):
+    reason = message.text.strip()
+    if not reason:
+        await message.answer("Iltimos, sababini yozing:")
+        return
+    await state.update_data(postpone_reason=reason)
+    await state.set_state(PostponeStates.new_date)
+    await message.answer("Surish mumkin bo'lgan sanani kiriting (masalan: 27.06.2026):")
+
+
+@router.message(PostponeStates.new_date)
+async def postpone_get_new_date(message: Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text.strip(), "%d.%m.%Y")
+    except ValueError:
+        await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
+        return
+    await state.update_data(postpone_new_date=message.text.strip())
+    await state.set_state(PostponeStates.new_time)
+    await message.answer("Surish mumkin bo'lgan vaqtni kiriting (masalan: 08:00):")
+
+
+@router.message(PostponeStates.new_time)
+async def postpone_get_new_time(message: Message, state: FSMContext):
+    try:
+        datetime.strptime(message.text.strip(), "%H:%M")
+    except ValueError:
+        await message.answer("Noto'g'ri format. Masalan: 08:00 shaklida kiriting:")
+        return
+    new_time = message.text.strip()
+
+    data = await state.get_data()
+    booking_id = data.get("postpone_booking_id")
+    reason = data.get("postpone_reason")
+    new_date = data.get("postpone_new_date")
+
+    booking = await db.get_booking(booking_id)
+    if (
+        not booking
+        or booking["status"] != "accepted"
+        or booking["examiner_telegram_id"] != message.from_user.id
+    ):
+        await state.clear()
+        await message.answer("Bu imtihon endi mavjud emas yoki sizga biriktirilgan emas.")
+        return
+
+    saved = await db.request_postpone(booking_id, message.from_user.id, reason, new_date, new_time)
+    if not saved:
+        await state.clear()
+        await message.answer("Bu imtihon endi mavjud emas yoki sizga biriktirilgan emas.")
+        return
+
+    await state.clear()
+    is_adm = await db.is_admin(message.from_user.id)
+    await message.answer(
+        "✅ So'rovingiz ustozga yuborildi. Javobini kuting.",
+        reply_markup=build_main_menu_kb("EXAMINER", is_adm),
+    )
+
+    examiner = await db.get_user(message.from_user.id)
+    try:
+        await message.bot.send_message(
+            booking["teacher_telegram_id"],
+            f"⏳ <b>Imtihon vaqtini surish so'rovi</b>\n\n"
+            f"Examiner: {examiner['full_name'] if examiner else booking['examiner_name']}\n"
+            f"Filial: {booking['branch']}\nGuruh: {booking['group_name']}\n"
+            f"Hozirgi sana/vaqt: {booking['exam_date']} {booking['exam_time']}\n\n"
+            f"Sabab: {reason}\n\n"
+            f"Taklif qilingan yangi sana/vaqt: <b>{new_date} {new_time}</b>\n\n"
+            "Rozimisiz?",
+            reply_markup=postpone_confirm_kb(booking_id),
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("postpone_yes:"))
+async def postpone_confirm_yes(callback: CallbackQuery):
+    booking_id = int(callback.data.split(":")[1])
+    booking = await db.get_booking(booking_id)
+    if not booking or booking["teacher_telegram_id"] != callback.from_user.id:
+        await callback.answer("Bu so'rov sizga tegishli emas.", show_alert=True)
+        return
+    if not booking.get("postpone_new_date"):
+        await callback.answer("Bu so'rov muddati o'tgan yoki allaqachon hal qilingan.", show_alert=True)
+        return
+
+    old_date, old_time = booking["exam_date"], booking["exam_time"]
+    new_date, new_time = booking["postpone_new_date"], booking["postpone_new_time"]
+    examiner_id = booking["examiner_telegram_id"]
+    examiner_name = booking["examiner_name"]
+
+    result = await db.approve_postpone(booking_id)
+    if result == "conflict":
+        await db.clear_postpone(booking_id)
+        await callback.message.edit_text(
+            (callback.message.text or "")
+            + "\n\n⚠️ Kechirasiz, examinerda bu yangi vaqtga endi boshqa imtihon bor. So'rov bekor qilindi."
+        )
+        await callback.answer("Konflikt aniqlandi", show_alert=True)
+        try:
+            await callback.bot.send_message(
+                examiner_id,
+                "⚠️ Ustoz rozi bo'lgan edi, lekin siz bu orada shu vaqtga boshqa imtihon "
+                "qabul qilib ulgurgansiz. So'rov bekor qilindi, eski vaqt kuchda qoladi.",
+            )
+        except Exception:
+            pass
+        return
+    if result != "ok":
+        await callback.answer("Bu so'rov endi amal qilmaydi.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        (callback.message.text or "") + f"\n\n✅ Roziligingiz yuborildi. Yangi vaqt: {new_date} {new_time}"
+    )
+    await callback.answer("Tasdiqlandi ✅")
+
+    try:
+        await callback.bot.send_message(
+            examiner_id,
+            f"✅ Ustoz roziligini berdi! Imtihon vaqti <b>{new_date} {new_time}</b> ga ko'chirildi.\n\n"
+            f"Guruh: {booking['group_name']}\nFilial: {booking['branch']}",
+        )
+    except Exception:
+        pass
+
+    change_text = (
+        f"🕒 <b>Buyurtma vaqti o'zgartirildi</b>\n\n"
+        f"Ustoz: {booking['teacher_name']}\nFilial: {booking['branch']}\n"
+        f"Guruh: {booking['group_name']}\nExaminer: {examiner_name}\n"
+        f"Eski sana/vaqt: {old_date} {old_time}\n"
+        f"Yangi sana/vaqt: {new_date} {new_time}"
+    )
+    notifications = await db.get_notifications(booking_id)
+    for note in notifications:
+        try:
+            await callback.bot.send_message(note["chat_id"], change_text)
+        except Exception:
+            pass
+
+
+@router.callback_query(F.data.startswith("postpone_no:"))
+async def postpone_confirm_no(callback: CallbackQuery):
+    booking_id = int(callback.data.split(":")[1])
+    booking = await db.get_booking(booking_id)
+    if not booking or booking["teacher_telegram_id"] != callback.from_user.id:
+        await callback.answer("Bu so'rov sizga tegishli emas.", show_alert=True)
+        return
+    if not booking.get("postpone_new_date"):
+        await callback.answer("Bu so'rov muddati o'tgan yoki allaqachon hal qilingan.", show_alert=True)
+        return
+
+    examiner_id = booking["examiner_telegram_id"]
+
+    result = await db.decline_postpone(booking_id)
+    if not result:
+        await callback.answer("Bu so'rov endi amal qilmaydi.", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        (callback.message.text or "")
+        + "\n\n❌ Rad etdingiz. Imtihon examinerdan yechildi va boshqa examinerlarga ochiq buyurtma sifatida yuborildi."
+    )
+    await callback.answer("Rad etildi")
+
+    if examiner_id:
+        try:
+            await callback.bot.send_message(
+                examiner_id,
+                "❌ Ustoz vaqtni surishga rozi bo'lmadi. Imtihon sizdan yechildi va boshqa "
+                "examinerlarga ochiq buyurtma sifatida yuborildi.",
+            )
+        except Exception:
+            pass
+
+    text = (
+        f"🔔 <b>Bo'sh imtihon buyurtmasi</b>\n\n"
+        f"Ustoz: {booking['teacher_name']}\n"
+        f"Filial: {booking['branch']}\n"
+        f"Sana: {booking['exam_date']}\n"
+        f"Vaqt: {booking['exam_time']}\n"
+        f"Test turi: {booking['test_type']}"
+        + (f" ({booking['test_name']})" if booking.get("test_name") else "")
+        + f"\nGuruh: {booking['group_name']}\n"
+        f"O'quvchilar soni: {booking['students_count']}"
+    )
+    examiners = await db.get_all_active_examiners()
+    for ex in examiners:
+        if ex["telegram_id"] == examiner_id:
+            continue
+        try:
+            sent = await callback.bot.send_message(
+                ex["telegram_id"], text, reply_markup=accept_booking_kb(booking_id)
+            )
+            await db.add_notification(booking_id, sent.chat.id, sent.message_id)
+        except Exception:
+            pass
