@@ -258,6 +258,16 @@ async def list_admins():
         return [dict(r) for r in rows]
 
 
+async def get_user_ids_by_role(role: str) -> list:
+    """role='TEACHER' yoki 'EXAMINER' — shu roldagi (statusidan qat'iy nazar) barcha
+    foydalanuvchilarning telegram_id'lari. Faqat examinerlarga yoki faqat ustozlarga
+    yo'naltirilgan xabar yuborish (broadcast) uchun ishlatiladi."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        cur = await db_.execute("SELECT telegram_id FROM users WHERE role=?", (role,))
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
+
+
 async def get_all_user_ids() -> list:
     """Botdan foydalangan HAMMA odamning telegram_id'lari — users jadvali (barcha
     holatlar: active/pending/approved/rejected/removed) va admins jadvali birlashtirilgan.
