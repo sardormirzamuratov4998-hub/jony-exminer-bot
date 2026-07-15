@@ -168,6 +168,11 @@ async def choose_branch(callback: CallbackQuery, state: FSMContext):
     status = "active"
     await db.upsert_user(telegram_id, role, full_name, branch, status, username)
     if role in ("TEACHER", "EXAMINER"):
+        # Eski (boshqa rol yoki oldingi ro'yxatdan o'tishdan qolgan) filial
+        # biriktirmalarini tozalab, faqat hozir tanlangan filialni qo'shamiz —
+        # aks holda eski filiallar "➕ Filial qo'shish" ro'yxatidan sababsiz
+        # yo'qolib qolaveradi (aslida ular hozirgi rolga tegishli emas edi).
+        await db.clear_teacher_branches(telegram_id)
         await db.add_teacher_branch(telegram_id, branch)
     await state.clear()
 
