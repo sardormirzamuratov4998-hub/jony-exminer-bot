@@ -81,6 +81,14 @@ class BookingStates(StatesGroup):
     reschedule_time = State()
 
 
+class PostponeStates(StatesGroup):
+    """EXAMINER: qabul qilgan imtihon vaqtini surish so'rovi."""
+    pick_booking = State()
+    reason = State()
+    new_date = State()
+    new_time = State()
+
+
 class AdminStates(StatesGroup):
     search_query = State()
     reminder_input = State()
