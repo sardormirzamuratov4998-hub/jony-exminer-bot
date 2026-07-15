@@ -507,6 +507,46 @@ async def accept_booking_handler(callback: CallbackQuery):
 
     examiner = await db.get_user(callback.from_user.id)
 
+    # END OF COURSE / MIDTERM: examinerda shu kuni shunday imtihon bo'lsa,
+    # u 2 soat davom etadi deb hisoblanadi (filialdan qat'iy nazar).
+    eoc_booking, eoc_remaining = await db.examiner_eoc_conflict(
+        callback.from_user.id, booking["exam_date"], booking["exam_time"]
+    )
+    if eoc_booking:
+        eoc_finish_time = db.add_minutes_to_time(eoc_booking["exam_time"], db.EOC_DURATION_MINUTES)
+        if eoc_remaining > db.EOC_NEGOTIATION_WINDOW_MINUTES:
+            await callback.answer(
+                f"Siz hozir {eoc_booking['test_type']} imtihonini o'tkazayapsiz, "
+                f"u soat {eoc_finish_time} da tugaydi. Bu buyurtmani hozircha "
+                f"qabul qila olmaysiz.",
+                show_alert=True,
+            )
+            return
+
+        saved = await db.propose_reschedule(
+            booking_id, callback.from_user.id, examiner["full_name"], eoc_finish_time
+        )
+        if not saved:
+            await callback.answer("Kechirasiz, bu buyurtma allaqachon band qilingan.", show_alert=True)
+            return
+
+        await callback.answer(
+            "So'rov yuborildi. Ustoz tasdiqlasa, sizga biriktiriladi.", show_alert=True
+        )
+
+        try:
+            await callback.bot.send_message(
+                booking["teacher_telegram_id"],
+                f"👋 <b>{examiner['full_name']}</b> imtihoningizni olmoqchi, lekin hozir "
+                f"{eoc_booking['test_type']} imtihonini o'tkazayapti va soat "
+                f"<b>{eoc_finish_time}</b> da bo'shaydi.\n\n"
+                f"Imtihonni shu vaqtga ko'chirishga rozimisiz?",
+                reply_markup=reschedule_confirm_kb(booking_id),
+            )
+        except Exception:
+            pass
+        return
+
     # YUMSHOQ KONFLIKT: examinerda shu kuni, BOSHQA filialda, 1soat 20daqiqadan
     # kam farq bilan imtihon bor — to'g'ridan-to'g'ri biriktirmasdan, avval
     # ustozdan vaqtni kechiktirishga rozimisiz deb so'raymiz.
