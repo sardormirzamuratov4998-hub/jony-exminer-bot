@@ -182,6 +182,15 @@ def accept_booking_kb(booking_id: int):
     return builder.as_markup()
 
 
+def reschedule_confirm_kb(booking_id: int):
+    """Ustozga: examiner boshqa filialdan keladi, vaqtni kechiktirishga rozimisiz?"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Ha", callback_data=f"resched_yes:{booking_id}")
+    builder.button(text="❌ Yo'q", callback_data=f"resched_no:{booking_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 def examiner_approve_kb(telegram_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Tasdiqlash", callback_data=f"approve_examiner:{telegram_id}")
