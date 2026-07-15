@@ -3,6 +3,8 @@ from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State
+from aiogram.filters import StateFilter
 
 import database as db
 from states import BookingStates
@@ -25,6 +27,30 @@ router = Router()
 async def _is_teacher(telegram_id: int):
     user = await db.get_user(telegram_id)
     return user if user and user["role"] == "TEACHER" and user["status"] != "removed" else None
+
+
+# Foydalanuvchi erkin matn kiritadigan (va shu sabab cancel_kb() ko'rsatiladigan)
+# barcha bosqichlar. Bu handler shu bosqichlardagi maxsus (format tekshiruvchi)
+# handlerlardan OLDIN turishi shart — shuning uchun fayl boshida joylashtirilgan.
+_FREE_TEXT_BOOKING_STATES = [
+    BookingStates.exam_date,
+    BookingStates.exam_time,
+    BookingStates.students_count,
+    BookingStates.custom_field_input,
+    BookingStates.repeat_group_name,
+    BookingStates.repeat_exam_date,
+    BookingStates.repeat_exam_time,
+    BookingStates.repeat_students_count,
+]
+
+
+@router.message(StateFilter(*_FREE_TEXT_BOOKING_STATES), F.text == "❌ Bekor qilish")
+async def cancel_booking_free_text(message: Message, state: FSMContext):
+    await state.clear()
+    is_adm = await db.is_admin(message.from_user.id)
+    user = await db.get_user(message.from_user.id)
+    role = user["role"] if user else None
+    await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb(role, is_adm))
 
 
 def _custom_fields_block(data) -> str:
