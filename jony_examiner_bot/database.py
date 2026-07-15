@@ -944,13 +944,17 @@ async def confirm_reschedule(booking_id: int) -> str:
 
 
 async def decline_reschedule(booking_id: int) -> bool:
-    """Ustoz 'Yo'q' bosganda: taklifni bekor qilib, buyurtmani boshqa
-    examiner qabul qilishi uchun ochiq (pending) holicha qoldiradi."""
+    """Taklifni bekor qilib, pending_* maydonlarni tozalaydi.
+    Status='pending' bo'lsa — buyurtma boshqa examiner uchun ochiq qoladi.
+    Agar bu orada booking allaqachon boshqa examiner tomonidan qabul qilingan
+    bo'lsa ham (status='accepted'), eski (endi keraksiz) pending_* izlarini
+    tozalash uchun shart qo'yilmagan — faqat shu ustunlarga tegadi, status yoki
+    examiner biriktirilishiga umuman ta'sir qilmaydi."""
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             """UPDATE bookings SET pending_examiner_telegram_id=NULL,
                pending_examiner_name=NULL, pending_new_time=NULL
-               WHERE id=? AND status='pending'""",
+               WHERE id=?""",
             (booking_id,),
         )
         await db.commit()
