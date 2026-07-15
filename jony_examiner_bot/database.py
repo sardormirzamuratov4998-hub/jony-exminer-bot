@@ -196,6 +196,11 @@ async def init_db():
         await _ensure_column(db, "bookings", "pending_examiner_telegram_id", "INTEGER")
         await _ensure_column(db, "bookings", "pending_examiner_name", "TEXT")
         await _ensure_column(db, "bookings", "pending_new_time", "TEXT")
+        # Biriktirilgan examiner "vaqtni surish" so'rovi yuborganda (qabul qilingan
+        # buyurtma uchun) — ustoz javob berguncha shu yerda saqlanadi.
+        await _ensure_column(db, "bookings", "postpone_reason", "TEXT")
+        await _ensure_column(db, "bookings", "postpone_new_date", "TEXT")
+        await _ensure_column(db, "bookings", "postpone_new_time", "TEXT")
         await db.commit()
 
         cur = await db.execute("SELECT COUNT(*) FROM branches")
@@ -558,6 +563,20 @@ async def get_examiners_by_branch(branch: str, status: str = "active"):
                 WHERE u.role='EXAMINER' AND u.status IN ({placeholders})
                   AND (u.branch=? OR tb.branch=?)""",
             (*statuses, branch, branch),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_all_active_examiners():
+    """Filialdan qat'iy nazar barcha faol (active/approved) examinerlar.
+    Examiner tomonidan rad etilgan (vaqtni surish so'rovi rad etilib, ustozdan
+    yechilgan) buyurtmani BARCHA examinerlarga 'bo'sh imtihon' sifatida
+    e'lon qilish uchun ishlatiladi."""
+    async with aiosqlite.connect(DB_PATH) as db_:
+        db_.row_factory = aiosqlite.Row
+        cur = await db_.execute(
+            "SELECT * FROM users WHERE role='EXAMINER' AND status IN ('active','approved')"
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -991,6 +1010,84 @@ async def decline_reschedule(booking_id: int) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ---------- EXAMINER: QABUL QILGAN IMTIHON VAQTINI SURISH SO'ROVI ----------
+# Biriktirilgan examiner "vaqtni surish" so'rasa (sabab + taklif qilingan yangi
+# sana/vaqt bilan), ustozga Ha/Yo'q so'raladi:
+#   - Ha  -> buyurtma o'sha examinerda qoladi, faqat sana/vaqt yangilanadi.
+#   - Yo'q -> buyurtma o'sha examinerdan yechiladi (yana 'pending' bo'ladi) va
+#             BARCHA examinerlarga bo'sh (ochiq) buyurtma sifatida qayta e'lon qilinadi.
+
+async def request_postpone(booking_id: int, examiner_telegram_id: int, reason: str,
+                            new_date: str, new_time: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE bookings SET postpone_reason=?, postpone_new_date=?, postpone_new_time=?
+               WHERE id=? AND status='accepted' AND examiner_telegram_id=?""",
+            (reason, new_date, new_time, booking_id, examiner_telegram_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def approve_postpone(booking_id: int) -> str:
+    """Ustoz 'Ha' bosganda. Returns 'ok' | 'conflict' | 'gone'."""
+    booking = await get_booking(booking_id)
+    if not booking or not booking.get("postpone_new_date"):
+        return "gone"
+
+    new_date = booking["postpone_new_date"]
+    new_time = booking["postpone_new_time"]
+    examiner_id = booking["examiner_telegram_id"]
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE bookings SET exam_date=?, exam_time=?,
+               postpone_reason=NULL, postpone_new_date=NULL, postpone_new_time=NULL,
+               reminder_1h_sent=0, reminder_time_sent=0, escalated=0
+               WHERE id=? AND status='accepted' AND examiner_telegram_id=?
+               AND NOT EXISTS (
+                   SELECT 1 FROM bookings
+                   WHERE examiner_telegram_id=? AND exam_date=? AND exam_time=?
+                     AND status='accepted' AND id != ?
+               )""",
+            (
+                new_date, new_time, booking_id, examiner_id,
+                examiner_id, new_date, new_time, booking_id,
+            ),
+        )
+        await db.commit()
+        if cur.rowcount > 0:
+            return "ok"
+        return "conflict"
+
+
+async def decline_postpone(booking_id: int) -> bool:
+    """Ustoz 'Yo'q' bosganda: buyurtma examinerdan yechiladi va yana
+    'pending' (ochiq, hech kimga biriktirilmagan) holatga qaytariladi."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE bookings SET status='pending', examiner_telegram_id=NULL,
+               examiner_name=NULL, accepted_at=NULL,
+               postpone_reason=NULL, postpone_new_date=NULL, postpone_new_time=NULL
+               WHERE id=? AND status='accepted'""",
+            (booking_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def clear_postpone(booking_id: int):
+    """So'rov muddati o'tgan/endi amal qilmaydigan holatlarda faqat
+    postpone_* izlarini tozalaydi (examinerga tegmaydi)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """UPDATE bookings SET postpone_reason=NULL, postpone_new_date=NULL,
+               postpone_new_time=NULL WHERE id=?""",
+            (booking_id,),
+        )
+        await db.commit()
 
 
 async def add_notification(booking_id: int, chat_id: int, message_id: int):
