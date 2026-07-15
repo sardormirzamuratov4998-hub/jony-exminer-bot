@@ -329,6 +329,16 @@ def admin_panel_kb():
     return builder.as_markup()
 
 
+def broadcast_target_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🧑‍💼 Faqat examinerlarga", callback_data="broadcast_target:EXAMINER")
+    builder.button(text="👩‍🏫 Faqat ustozlarga", callback_data="broadcast_target:TEACHER")
+    builder.button(text="📢 Hammaga", callback_data="broadcast_target:ALL")
+    builder.button(text="❌ Bekor qilish", callback_data="broadcast_target_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def broadcast_confirm_kb():
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Ha, hammaga yuborish", callback_data="broadcast_send")
