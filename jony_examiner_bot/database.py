@@ -190,7 +190,12 @@ async def init_db():
         # ---------- ESKI (TIKLANGAN) BAZA FAYLLARI UCHUN AVTOMATIK MIGRATSIYA ----------
         # Kelajakda biror jadvalga yangi ustun qo'shilsa, shu yerga bitta qator qo'shiladi:
         #   await _ensure_column(db, "jadval_nomi", "yangi_ustun", "TEXT")
-        # Hozircha qo'shiladigan yangi ustun yo'q.
+        #
+        # Boshqa filialdan "yumshoq konflikt" (1soat 20min ichida) bilan kelgan
+        # buyurtmani ustozga taklif qilib turgan holatni saqlash uchun:
+        await _ensure_column(db, "bookings", "pending_examiner_telegram_id", "INTEGER")
+        await _ensure_column(db, "bookings", "pending_examiner_name", "TEXT")
+        await _ensure_column(db, "bookings", "pending_new_time", "TEXT")
         await db.commit()
 
         cur = await db.execute("SELECT COUNT(*) FROM branches")
@@ -844,6 +849,112 @@ async def examiner_has_conflict(examiner_telegram_id: int, exam_date: str, exam_
         )
         row = await cur.fetchone()
         return row[0] > 0
+
+
+def _time_diff_minutes(t1: str, t2: str) -> int:
+    """Ikkita 'HH:MM' vaqt orasidagi farqni daqiqada qaytaradi (musbat son)."""
+    fmt = "%H:%M"
+    d1 = datetime.strptime(t1, fmt)
+    d2 = datetime.strptime(t2, fmt)
+    return abs(int((d1 - d2).total_seconds() // 60))
+
+
+def add_minutes_to_time(time_str: str, minutes: int) -> str:
+    """'HH:MM' shaklidagi vaqtga daqiqa qo'shib, yana 'HH:MM' qaytaradi
+    (24 soatdan oshib ketsa ham to'g'ri aylanadi, sana o'zgarmaydi deb hisoblanadi)."""
+    base = datetime.strptime(time_str, "%H:%M")
+    new_dt = base + timedelta(minutes=minutes)
+    return new_dt.strftime("%H:%M")
+
+
+SOFT_CONFLICT_BUFFER_MINUTES = 80  # 1 soat 20 daqiqa
+
+
+async def examiner_soft_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str, branch: str):
+    """Examinerning O'SHA KUNI, BOSHQA filialda, yangi buyurtma vaqtiga 1soat20min
+    dan kam farq bilan qabul qilingan (accepted) imtihoni bormi — shuni qaytaradi.
+    Agar topilsa, o'sha buyurtma dict holida qaytariladi (eng yaqin vaqtdagisi),
+    aks holda None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            """SELECT * FROM bookings
+               WHERE examiner_telegram_id=? AND exam_date=? AND status='accepted' AND branch!=?""",
+            (examiner_telegram_id, exam_date, branch),
+        )
+        rows = await cur.fetchall()
+
+    best = None
+    best_diff = None
+    for row in rows:
+        b = dict(row)
+        diff = _time_diff_minutes(b["exam_time"], exam_time)
+        if 0 < diff < SOFT_CONFLICT_BUFFER_MINUTES:
+            if best is None or diff < best_diff:
+                best, best_diff = b, diff
+    return best
+
+
+async def propose_reschedule(booking_id: int, examiner_telegram_id: int, examiner_name: str, new_time: str) -> bool:
+    """Examiner 'boshqa filialdan kelaman, lekin kechroq' deb so'rov yuborganda,
+    buyurtmaga taklifni yozib qo'yamiz (hali status='pending' bo'lib qoladi,
+    ustoz tasdiqlaguncha hech kimga biriktirilmaydi)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE bookings SET pending_examiner_telegram_id=?, pending_examiner_name=?,
+               pending_new_time=? WHERE id=? AND status='pending'""",
+            (examiner_telegram_id, examiner_name, new_time, booking_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def confirm_reschedule(booking_id: int) -> str:
+    """Ustoz 'Ha' bosganda: buyurtma shu examinerga biriktiriladi VA vaqti
+    avtomatik yangi vaqtga o'zgartiriladi. Returns 'ok' | 'conflict' | 'taken' | 'gone'."""
+    booking = await get_booking(booking_id)
+    if not booking:
+        return "gone"
+    if booking["status"] != "pending" or not booking["pending_examiner_telegram_id"]:
+        return "taken"
+
+    examiner_id = booking["pending_examiner_telegram_id"]
+    examiner_name = booking["pending_examiner_name"]
+    new_time = booking["pending_new_time"]
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE bookings SET status='accepted', examiner_telegram_id=?, examiner_name=?,
+               exam_time=?, accepted_at=?, pending_examiner_telegram_id=NULL,
+               pending_examiner_name=NULL, pending_new_time=NULL
+               WHERE id=? AND status='pending'
+               AND NOT EXISTS (
+                   SELECT 1 FROM bookings
+                   WHERE examiner_telegram_id=? AND exam_date=? AND exam_time=? AND status='accepted'
+               )""",
+            (
+                examiner_id, examiner_name, new_time, now_tashkent().isoformat(),
+                booking_id, examiner_id, booking["exam_date"], new_time,
+            ),
+        )
+        await db.commit()
+        if cur.rowcount > 0:
+            return "ok"
+        return "conflict"
+
+
+async def decline_reschedule(booking_id: int) -> bool:
+    """Ustoz 'Yo'q' bosganda: taklifni bekor qilib, buyurtmani boshqa
+    examiner qabul qilishi uchun ochiq (pending) holicha qoldiradi."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE bookings SET pending_examiner_telegram_id=NULL,
+               pending_examiner_name=NULL, pending_new_time=NULL
+               WHERE id=? AND status='pending'""",
+            (booking_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def add_notification(booking_id: int, chat_id: int, message_id: int):
