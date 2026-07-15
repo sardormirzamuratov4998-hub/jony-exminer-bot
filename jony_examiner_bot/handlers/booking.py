@@ -1,222 +1,11 @@
-
-Claude finished the response
-deployment sucsesful dedi lekin start bossam hech narsa o'zgarmadi nima bo'lishi kerak edi ozi
-
-
-Metodikali debugging jarayonini rejalashtirdi
-Metodikali debugging jarayonini rejalashtirdi
-Deploy muvaffaqiyatli bo'lgani — kod ishga tushdi, degani. Lekin botning o'zi javob bermasa, odatda quyidagi sabablardan biri bo'ladi.
-
-1. Avval Logs'ni tekshiring
-
-Railway'da service'ingizga kiring → "Deployments" yoki "Logs" tab. U yerda quyidagilardan birini ko'rishingiz kerak:
-
-Agar INFO:aiogram... kabi qatorlar chiqib, xato bo'lmasa → bot ishlab turibdi, muammo boshqa joyda
-Agar RuntimeError: BOT_TOKEN topilmadi! chiqsa → Variables noto'g'ri saqlangan
-Agar Unauthorized yoki 401 chiqsa → token noto'g'ri nusxalangan
-Logs matnini shu yerga tashlang — aniq aytib beraman.
-
-2. Eng ehtimolli sabablar:
-
-BOT_TOKEN noto'g'ri kiritilgan — token oldida/orqasida bo'sh joy qolib ketgan bo'lishi mumkin, yoki qo'shtirnoq ichida yozilgan ("7123..." emas, faqat 7123...)
-Boshqa joyda bot ishlab turibdi — agar kompyuteringizda ham python main.py orqali shu bot ishlab tursa, ikkalasi bir vaqtda polling qilolmaydi, Telegram xato beradi. Kompyuteringizdagi botni to'xtating.
-Variables saqlangandan keyin qayta deploy bo'lmagan — Variables qo'shgandan keyin Railway avtomatik redeploy qilishi kerak, lekin ba'zan qo'lda "Redeploy" bosish kerak bo'ladi (Deployments tab'da uchta nuqta → Redeploy)
-Tezkor tekshirish: Railway Logs'da nima yozilganini skrinshot qilib tashlang — o'sha yerdan aniq nima bo'lganini ko'ramiz.
-
-
-jony-exminer-bot-main (12).zip
-zip
-
-ustozda bo'ladimi adminda bo'ladimi bir operatsiya o'rtasida bekor qilish komandasi berilsa examiner knopkalari chiqib qolyabdi keyin uni bossa siz royxatdan otgan examiner emassiz deyabdi.
-
-
-Ran 10 commands, viewed 4 files
-Ran 10 commands, viewed 4 files
-Aynan sababini topdim. Bu — real xato, tasodifiy emas.
-
-Muammo qayerda: handlers/exam_flow.py faylida 104-108 qatorlarda:
-
-
-Tekshirdi va rol tekshiruvi tizimini tuzatishni rejalashtirdi
-Tekshirdi va rol tekshiruvi tizimini tuzatishni rejalashtirdi
-Nima uchun bunday bo'layapti:
-
-"❌ Bekor qilish" tugmasi bir nechta joyda ishlatiladi — Ustoz buyurtma berayotganda (booking.py), Admin restore/broadcast qilayotganda (admin.py), va Examiner test kiritayotganda (exam_flow.py). Lekin exam_flow.pydagi handler hech qanday holatga (state) bog'lanmagan — u har qanday "❌ Bekor qilish" bosilganda ishga tushadi, kim bosishidan qat'iy nazar.
-
-Va eng asosiysi — u har doim "EXAMINER" rolini qattiq yozib qo'yilgan holda (hardcoded) menyu ko'rsatadi:
-
-python
-await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb("EXAMINER", is_adm))
-Shuning uchun: Ustoz buyurtma berish jarayonida "Bekor qilish" bossa — unga Examiner menyusi chiqadi (chunki funksiya shunday yozilgan). U yerdagi "🆕 Test kiritish" tugmasini bossa, rol tekshiruvi (user["role"] != "EXAMINER") ishga tushib, "faqat tasdiqlangan Examinerlar uchun" deb rad etadi.
-
-Tuzatish — real foydalanuvchi rolini bazadan olib, o'shani ko'rsatish kerak:
-
-
-Edited a file, ran a command
-Edited a file, ran a command
-Fix to'g'ri — get_user role maydonini qaytaradi. Endi sintaksisni tekshiraman:
-
-
-Ran 2 commands, read a file
-Ran 2 commands, read a file
-Tuzatildi. GitHub'da handlers/exam_flow.py faylini oching, cancel_flow funksiyasini (104-108 qatorlar atrofida) shuning bilan almashtiring:
-
-python
-@router.message(F.text == "❌ Bekor qilish")
-async def cancel_flow(message: Message, state: FSMContext):
-    await state.clear()
-    is_adm = await db.is_admin(message.from_user.id)
-    user = await db.get_user(message.from_user.id)
-    role = user["role"] if user else None
-    await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb(role, is_adm))
-(Yoki yuqoridagi to'liq faylni yuklab, o'sha exam_flow.pyni to'liq almashtiring — o'sha qatordan boshqa hech narsa o'zgarmadi.)
-
-Endi Ustoz "Bekor qilish" bossa — o'ziga Ustoz menyusi chiqadi, Admin bossa — Admin/o'z roli menyusi, Examiner bossa — Examiner menyusi. Push qilib, Railway qayta deploy qilgach sinab ko'ring.
-
-
-Exam flow
-PY 
-sana vaqtni kiritganda bekor qilishni bossa bunday format mavjud emas deb bekor qilmayabdi exam zakaz qilayotganda
-
-
-Viewed 6 files, ran 5 commands, edited 2 files
-Viewed 6 files, ran 5 commands, edited 2 files
-Sintaksis va importlarni tekshiramiz:
-
-
-Tekshirdi router tartibi va bekor qilish mexanizmini
-Tekshirdi router tartibi va bekor qilish mexanizmini
-Bu — xuddi shu turdagi, lekin boshqa joydagi bug. Sababi va tuzatilishi:
-
-Sabab: booking.py faylida sana/vaqt kiritish handlerlari (get_exam_date, get_exam_time) faqat holatga (state) bog'langan, matnni tekshirmasdan turib formatga urinadi. Router tartibida booking.py — exam_flow.pydan oldin ishlaydi (bot.pyda shunday ro'yxatga olingan), shuning uchun "❌ Bekor qilish" matni ham sana sifatida qabul qilinib, formatga mos kelmagani uchun rad etilar edi — bekor qilish handleri hech qachon ishga tushmasdi.
-
-Tuzatish: booking.py fayliga, barcha shunga o'xshash matn-kiritish bosqichlari (sana, vaqt, o'quvchilar soni, qo'shimcha maydonlar, takroriy buyurtma bosqichlari) uchun "❌ Bekor qilish"ni birinchi bo'lib ushlaydigan handler qo'shdim — u boshqa handlerlardan oldin joylashtirilgan, shuning uchun format tekshiruvi ishga tushmasdan, to'g'ridan-to'g'ri bekor qiladi va foydalanuvchining haqiqiy roliga mos menyu ko'rsatadi.
-
-
-Ran a command, read a file
-Ran a command, read a file
-Ikkala tuzatilgan fayl ham tayyor — booking.py va exam_flow.py (avvalgi rol xatosi ham shu faylda).
-
-GitHub'da:
-
-handlers/booking.py — to'liq shu fayl bilan almashtiring
-handlers/exam_flow.py — agar hali almashtirmagan bo'lsangiz, shuni ham almashtiring
-Nima o'zgardi (booking.py): yangi bosqichlar (sana, vaqt, o'quvchilar soni, qo'shimcha maydonlar, "avval imtihon topshirgan guruh" oqimi) davomida "❌ Bekor qilish" bosilsa — endi format tekshiruvidan o'tmasdan, to'g'ridan-to'g'ri bekor qiladi va foydalanuvchining haqiqiy roliga mos menyu chiqadi.
-
-Push qilib, Railway qayta deploy qilgach — Ustoz bo'lib buyurtma berish jarayonida sana/vaqt bosqichida "Bekor qilish"ni sinab ko'ring.
-
-
-Booking
-PY 
-
-Exam flow
-PY 
-examiner xozir aynan bitta vaqtga ikkita imtixon olaman desa band degan xabar boradi. endi bitta filialda imtixon olinsa boshqa filialdan zakaz tushsa 1soatu 20 minutgacha band desin lekin qabul qilish bosilsin so'rov yuborildi degan ustozga shu examiner imtixoningizni olmoqchi faqat narigi filialdan kelishga vaqt kerak imtixonni yuqoridagi imtixon tugashi 1soat 20daqiqada soat nechi bolsa shu soatga kechiktira olasizmi degan so'rov kelsin ha ni bossa olgan examinerga biriktirilsin va exam vaqti avtomatik shu sanaga ozgartirilsin yo'q bo'lsa boshqa bo'sh examiner olishi uchun ochiq qoldirsin
-
-Show more
-
-Ran 3 commands, viewed 3 files
-Ran 3 commands, viewed 3 files
-Yaxshi, mavjud migratsiya mexanizmi bor. Shuni ko'ramiz:
-
-
-Architektladi soft konflikt tizimi va avtomatik vaqt qayta belgilash mexanizmini
-Architektladi soft konflikt tizimi va avtomatik vaqt qayta belgilash mexanizmini
-Tushunarli — bu jiddiy funksional o'zgarish. Avval bazaga yangi ustunlar qo'shaman (mavjud migratsiya tizimi orqali), keyin logika va xabarlarni yozaman.
-
-
-Architected helper functions for conflict detection and rescheduling workflow
-Architected helper functions for conflict detection and rescheduling workflow
-Endi booking.pydagi qabul qilish handlerini yangilayman va yangi klaviatura, ustozga so'rov handlerlarini qo'shaman.
-
-
-Viewed a file, edited a file
-Viewed a file, edited a file
-Endi booking.pyda asosiy logikani yozamiz — accept_booking_handlerni yangilash va yangi ikki callback handler qo'shish:
-
-
-Reschedule_confirm_kb ni import qilish
-Reschedule_confirm_kb ni import qilish
-Endi accept_booking_handlerni ko'rib, uni yangilaymiz:
-
-
-Navigated soft-conflict resolution, race conditions, and examiner scheduling logic
-Navigated soft-conflict resolution, race conditions, and examiner scheduling logic
-Endi sintaksis va import tekshiruvlarini o'tkazamiz:
-
-
-Verified dict conversion logic and planned comprehensive import testing
-Verified dict conversion logic and planned comprehensive import testing
-Endi to'liq loyihani import qilib, real ishlashini simulyatsiya qilamiz:
-
-
-Kutubxonalarni o'rnatish va modullarni import qilish
-Kutubxonalarni o'rnatish va modullarni import qilish
-Endi haqiqiy stsenariyni to'liq simulyatsiya qilib ko'ramiz — real bazada:
-
-
-Simulyatsiya testi orqali bronlash funksiyasini tekshirdi
-Simulyatsiya testi orqali bronlash funksiyasini tekshirdi
-Hammasi to'g'ri ishlayapti. Endi "Yo'q" bosilgan holatni ham sinaymiz:
-
-
-Tekshiruvchi ma'lumotlarini qayta ishlash va orqaga mos kelishni tasdiqlab o'tdi
-Tekshiruvchi ma'lumotlarini qayta ishlash va orqaga mos kelishni tasdiqlab o'tdi
-Migratsiya mexanizmini ham (eski baza tiklanganda) tekshiramiz:
-
-
-Eski bazaga migratsiya sinovi
-Eski bazaga migratsiya sinovi
-Barcha stsenariylar (yumshoq konflikt, "Ha", "Yo'q", eski bazaga migratsiya) muvaffaqiyatli sinovdan o'tdi. Endi fayllarni tayyorlab beraman:
-
-
-Ran a command, read a file
-Ran a command, read a file
-Tayyor va sinovdan o'tgan — 3 ta fayl: database.py, keyboards.py, handlers/booking.py
-
-Qanday ishlaydi
-Aynan bir xil vaqt — hech narsa o'zgarmadi, avvalgidek to'liq bloklanadi.
-Boshqa filialdan, 1soat 20 daqiqa ichida — Examiner "Qabul qilish" bossa:
-Unga: "So'rov yuborildi. Ustoz tasdiqlasa, sizga biriktiriladi."
-Ustozga: "👋 Examiner X imtihoningizni olmoqchi, faqat boshqa filialdan kelishga vaqt kerak. Imtihonni soat 11:20 ga kechiktira olasizmi?" + ✅ Ha / ❌ Yo'q tugmalari
-Ustoz "Ha" bossa → buyurtma shu examinerga biriktiriladi, imtihon vaqti avtomatik 11:20 ga o'zgaradi, examinerga xabar boradi.
-Ustoz "Yo'q" bossa → so'rov bekor bo'ladi, buyurtma ochiq qoladi — boshqa bo'sh examiner oddiy tartibda qabul qila oladi.
-Vaqt hisoblash misoli: birinchi imtihon 10:00 da bo'lsa, taklif qilinadigan yangi vaqt = 10:00 + 1soat20min = 11:20.
-
-O'rnatish
-GitHub'da 3 faylni almashtiring:
-
-database.py
-keyboards.py
-handlers/booking.py
-Push qiling — Railway avtomatik qayta deploy qiladi. Ma'lumot yo'qolmaydi — bazaga yangi ustunlar avtomatik migratsiya orqali qo'shiladi (buni ham eski baza bilan sinab ko'rdim).
-
-Eslatma: hozircha bufer vaqt (1soat 20min) kod ichida SOFT_CONFLICT_BUFFER_MINUTES = 80 qilib yozilgan (database.pyda) — kelajakda buni o'zgartirish kerak bo'lsa, faqat shu bitta raqamni almashtirasiz.
-
-
-Database
-PY 
-
-Keyboards
-PY 
-
-Booking
-PY 
-
-
-
-
-
-Claude is AI and can make mistakes. Please double-check responses.
-Booking · PY
 from datetime import datetime
- 
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State
 from aiogram.filters import StateFilter
- 
+
 import database as db
 from states import BookingStates
 from keyboards import (
@@ -232,15 +21,15 @@ from keyboards import (
     reschedule_pick_kb,
     REPEAT_FIELD_ORDER,
 )
- 
+
 router = Router()
- 
- 
+
+
 async def _is_teacher(telegram_id: int):
     user = await db.get_user(telegram_id)
     return user if user and user["role"] == "TEACHER" and user["status"] != "removed" else None
- 
- 
+
+
 # Foydalanuvchi erkin matn kiritadigan (va shu sabab cancel_kb() ko'rsatiladigan)
 # barcha bosqichlar. Bu handler shu bosqichlardagi maxsus (format tekshiruvchi)
 # handlerlardan OLDIN turishi shart — shuning uchun fayl boshida joylashtirilgan.
@@ -254,8 +43,8 @@ _FREE_TEXT_BOOKING_STATES = [
     BookingStates.repeat_exam_time,
     BookingStates.repeat_students_count,
 ]
- 
- 
+
+
 @router.message(StateFilter(*_FREE_TEXT_BOOKING_STATES), F.text == "❌ Bekor qilish")
 async def cancel_booking_free_text(message: Message, state: FSMContext):
     await state.clear()
@@ -263,8 +52,8 @@ async def cancel_booking_free_text(message: Message, state: FSMContext):
     user = await db.get_user(message.from_user.id)
     role = user["role"] if user else None
     await message.answer("Bekor qilindi.", reply_markup=build_main_menu_kb(role, is_adm))
- 
- 
+
+
 def _custom_fields_block(data) -> str:
     labels = data.get("custom_field_labels") or {}
     answers = data.get("custom_field_answers") or {}
@@ -272,8 +61,8 @@ def _custom_fields_block(data) -> str:
         return ""
     lines = [f"{labels.get(key, key)}: {value}" for key, value in answers.items()]
     return "\n" + "\n".join(lines)
- 
- 
+
+
 def _booking_summary(user, data) -> str:
     return (
         "📋 <b>Buyurtma ma'lumotlari:</b>\n\n"
@@ -288,18 +77,18 @@ def _booking_summary(user, data) -> str:
         + _custom_fields_block(data)
         + "\n\nYuborishni tasdiqlaysizmi?"
     )
- 
- 
+
+
 @router.message(F.text == "📅 Imtihon buyurtma qilish")
 async def start_booking(message: Message, state: FSMContext):
     user = await _is_teacher(message.from_user.id)
     if not user:
         return
- 
+
     branches = await db.get_teacher_branches(message.from_user.id)
     if not branches:
         branches = [user["branch"]]
- 
+
     if len(branches) == 1:
         await state.update_data(branch=branches[0])
         await state.set_state(BookingStates.exam_date)
@@ -313,27 +102,27 @@ async def start_booking(message: Message, state: FSMContext):
             "Qaysi filial uchun buyurtma qilyapsiz?",
             reply_markup=booking_branch_kb(branches),
         )
- 
- 
+
+
 _STATUS_LABELS = {
     "pending": ("🟡", "Kutilmoqda"),
     "accepted": ("🟢", "Qabul qilingan"),
     "cancelled": ("🔴", "Bekor qilingan"),
     "expired": ("⚪️", "Muddati o'tgan"),
 }
- 
- 
+
+
 @router.message(F.text == "📋 Mening buyurtmalarim")
 async def my_bookings(message: Message):
     user = await _is_teacher(message.from_user.id)
     if not user:
         return
- 
+
     bookings = await db.get_teacher_bookings(message.from_user.id)
     if not bookings:
         await message.answer("Sizda hozircha buyurtmalar yo'q.")
         return
- 
+
     lines = ["📋 <b>Mening buyurtmalarim:</b>"]
     for b in bookings:
         emoji, label = _STATUS_LABELS.get(b["status"], ("⚪️", b["status"]))
@@ -348,31 +137,31 @@ async def my_bookings(message: Message):
             f"{examiner_line}"
         )
     await message.answer("\n".join(lines))
- 
- 
+
+
 # =========================================================
 # BUYURTMA VAQTINI KO'CHIRISH
 # =========================================================
- 
+
 @router.message(F.text == "🕒 Vaqtni ko'chirish")
 async def start_reschedule(message: Message, state: FSMContext):
     user = await _is_teacher(message.from_user.id)
     if not user:
         return
- 
+
     bookings = await db.get_teacher_bookings(message.from_user.id, limit=50)
     active = [b for b in bookings if b["status"] in ("pending", "accepted")]
     if not active:
         await message.answer("Sizda hozircha vaqtini ko'chirish mumkin bo'lgan faol buyurtmalar yo'q.")
         return
- 
+
     await state.set_state(BookingStates.reschedule_pick)
     await message.answer(
         "Qaysi buyurtmaning sana/vaqtini ko'chirmoqchisiz?",
         reply_markup=reschedule_pick_kb(active),
     )
- 
- 
+
+
 @router.callback_query(BookingStates.reschedule_pick, F.data == "reschedule_cancel")
 async def reschedule_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -380,8 +169,8 @@ async def reschedule_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Bekor qilindi.")
     await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
     await callback.answer()
- 
- 
+
+
 @router.callback_query(BookingStates.reschedule_pick, F.data.startswith("reschedule_pick:"))
 async def reschedule_pick(callback: CallbackQuery, state: FSMContext):
     booking_id = int(callback.data.split(":", 1)[1])
@@ -392,7 +181,7 @@ async def reschedule_pick(callback: CallbackQuery, state: FSMContext):
     if booking["status"] not in ("pending", "accepted"):
         await callback.answer("Bu buyurtma endi faol emas.", show_alert=True)
         return
- 
+
     await state.update_data(reschedule_booking_id=booking_id)
     await state.set_state(BookingStates.reschedule_date)
     await callback.message.edit_text(
@@ -400,8 +189,8 @@ async def reschedule_pick(callback: CallbackQuery, state: FSMContext):
         "Yangi sanani kiriting (masalan: 27.06.2026):"
     )
     await callback.answer()
- 
- 
+
+
 @router.message(BookingStates.reschedule_date)
 async def reschedule_get_date(message: Message, state: FSMContext):
     try:
@@ -412,8 +201,8 @@ async def reschedule_get_date(message: Message, state: FSMContext):
     await state.update_data(new_exam_date=message.text.strip())
     await state.set_state(BookingStates.reschedule_time)
     await message.answer("Yangi vaqtni kiriting (masalan: 08:00):")
- 
- 
+
+
 @router.message(BookingStates.reschedule_time)
 async def reschedule_get_time(message: Message, state: FSMContext):
     try:
@@ -422,21 +211,21 @@ async def reschedule_get_time(message: Message, state: FSMContext):
         await message.answer("Noto'g'ri format. Masalan: 08:00 shaklida kiriting:")
         return
     new_time = message.text.strip()
- 
+
     data = await state.get_data()
     booking_id = data.get("reschedule_booking_id")
     new_date = data.get("new_exam_date")
- 
+
     booking = await db.get_booking(booking_id)
     if not booking or booking["status"] not in ("pending", "accepted"):
         await state.clear()
         await message.answer("Bu buyurtma endi mavjud emas yoki faol emas.")
         return
- 
+
     old_date, old_time = booking["exam_date"], booking["exam_time"]
     examiner_id = booking.get("examiner_telegram_id") if booking["status"] == "accepted" else None
     same_datetime = (new_date == old_date and new_time == old_time)
- 
+
     # Tezkor (do'stona) tekshiruv — aniq javob esa pastdagi bo'linmas UPDATE'dan keladi.
     if examiner_id and not same_datetime:
         conflict = await db.examiner_has_conflict(examiner_id, new_date, new_time)
@@ -447,7 +236,7 @@ async def reschedule_get_time(message: Message, state: FSMContext):
                 "yoki /change_role yozib bekor qiling."
             )
             return
- 
+
     result = await db.reschedule_booking(booking_id, new_date, new_time, examiner_id)
     if result == "conflict":
         await message.answer(
@@ -460,9 +249,9 @@ async def reschedule_get_time(message: Message, state: FSMContext):
         await state.clear()
         await message.answer("Bu buyurtma endi mavjud emas yoki faol emas.")
         return
- 
+
     await state.clear()
- 
+
     is_adm = await db.is_admin(message.from_user.id)
     await message.answer(
         f"✅ Buyurtma vaqti ko'chirildi!\n\n"
@@ -470,7 +259,7 @@ async def reschedule_get_time(message: Message, state: FSMContext):
         f"Eski: {old_date} {old_time}\nYangi: {new_date} {new_time}",
         reply_markup=build_main_menu_kb("TEACHER", is_adm),
     )
- 
+
     change_text = (
         f"🕒 <b>Buyurtma vaqti o'zgartirildi</b>\n\n"
         f"Ustoz: {booking['teacher_name']}\nFilial: {booking['branch']}\n"
@@ -478,7 +267,7 @@ async def reschedule_get_time(message: Message, state: FSMContext):
         f"Eski sana/vaqt: {old_date} {old_time}\n"
         f"Yangi sana/vaqt: {new_date} {new_time}"
     )
- 
+
     # Buyurtma haqida avval xabar olgan barcha tomonlarga (filial examinerlari,
     # admin guruh, va END OF COURSE/MIDTERM bo'lsa — o'quv bo'lim rahbarlari ham) yuboriladi
     notifications = await db.get_notifications(booking_id)
@@ -487,14 +276,14 @@ async def reschedule_get_time(message: Message, state: FSMContext):
             await message.bot.send_message(note["chat_id"], change_text)
         except Exception:
             pass
- 
+
     if booking["status"] == "pending":
         await message.answer(
             "Eslatma: buyurtma hali hech kim tomonidan qabul qilinmagan, "
             "yangi vaqt bilan qabul qilinishini kuting."
         )
- 
- 
+
+
 @router.callback_query(BookingStates.choose_branch, F.data.startswith("bookbranch:"))
 async def choose_booking_branch(callback: CallbackQuery, state: FSMContext):
     branch = callback.data.split(":", 1)[1]
@@ -503,8 +292,8 @@ async def choose_booking_branch(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(f"Filial: {branch} ✅")
     await callback.message.answer("Imtihon sanasini kiriting (masalan: 27.06.2026):")
     await callback.answer()
- 
- 
+
+
 @router.message(BookingStates.exam_date)
 async def get_exam_date(message: Message, state: FSMContext):
     try:
@@ -515,8 +304,8 @@ async def get_exam_date(message: Message, state: FSMContext):
     await state.update_data(exam_date=message.text.strip())
     await state.set_state(BookingStates.exam_time)
     await message.answer("Imtihon vaqtini kiriting (masalan: 08:00):")
- 
- 
+
+
 @router.message(BookingStates.exam_time)
 async def get_exam_time(message: Message, state: FSMContext):
     try:
@@ -528,8 +317,8 @@ async def get_exam_time(message: Message, state: FSMContext):
     await state.set_state(BookingStates.test_type)
     test_types = await db.get_test_types()
     await message.answer("Test turini tanlang:", reply_markup=test_type_booking_kb(test_types))
- 
- 
+
+
 @router.callback_query(BookingStates.test_type, F.data.startswith("booking_type:"))
 async def get_test_type(callback: CallbackQuery, state: FSMContext):
     test_type = callback.data.split(":", 1)[1]
@@ -543,29 +332,29 @@ async def get_test_type(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"Test turi: {test_type} ✅")
         await callback.message.answer("Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):")
     await callback.answer()
- 
- 
+
+
 @router.message(BookingStates.unit_name)
 async def get_unit_name(message: Message, state: FSMContext):
     await state.update_data(test_name=message.text.strip())
     await state.set_state(BookingStates.group_name)
     await message.answer("Guruh/Daraja nomini kiriting (masalan: Step 3 (Vikings)):")
- 
- 
+
+
 @router.message(BookingStates.group_name)
 async def get_group_name(message: Message, state: FSMContext):
     await state.update_data(group_name=message.text.strip())
     await state.set_state(BookingStates.students_count)
     await message.answer("O'quvchilar sonini kiriting:")
- 
- 
+
+
 async def _go_to_confirm(answer_func, telegram_id: int, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(telegram_id)
     await state.set_state(BookingStates.confirm)
     await answer_func(_booking_summary(user, data), reply_markup=booking_confirm_kb())
- 
- 
+
+
 async def _ask_next_custom_field(answer_func, telegram_id: int, state: FSMContext):
     data = await state.get_data()
     queue = data.get("custom_field_queue") or []
@@ -574,15 +363,15 @@ async def _ask_next_custom_field(answer_func, telegram_id: int, state: FSMContex
         return
     label = data["custom_field_labels"][queue[0]]
     await answer_func(f"{label}:")
- 
- 
+
+
 @router.message(BookingStates.students_count)
 async def get_students_count(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
         await message.answer("Faqat son kiriting:")
         return
     await state.update_data(students_count=int(message.text.strip()))
- 
+
     fields = await db.get_booking_fields()
     if fields:
         await state.update_data(
@@ -595,8 +384,8 @@ async def get_students_count(message: Message, state: FSMContext):
     else:
         await state.update_data(custom_field_answers={}, custom_field_labels={})
         await _go_to_confirm(message.answer, message.from_user.id, state)
- 
- 
+
+
 @router.message(BookingStates.custom_field_input)
 async def get_custom_field_answer(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -609,8 +398,8 @@ async def get_custom_field_answer(message: Message, state: FSMContext):
     answers[key] = message.text.strip()
     await state.update_data(custom_field_queue=queue, custom_field_answers=answers)
     await _ask_next_custom_field(message.answer, message.from_user.id, state)
- 
- 
+
+
 @router.callback_query(BookingStates.confirm, F.data == "booking_cancel")
 async def booking_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -618,13 +407,13 @@ async def booking_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Bekor qilindi.")
     await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
     await callback.answer()
- 
- 
+
+
 @router.callback_query(BookingStates.confirm, F.data == "booking_confirm")
 async def booking_confirm(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = await db.get_user(callback.from_user.id)
- 
+
     booking_id = await db.create_booking({
         "teacher_telegram_id": callback.from_user.id,
         "teacher_name": user["full_name"],
@@ -639,11 +428,11 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
     for key, value in (data.get("custom_field_answers") or {}).items():
         await db.set_booking_field_value(booking_id, key, value)
     await state.clear()
- 
+
     is_adm = await db.is_admin(callback.from_user.id)
     await callback.message.edit_text("✅ Buyurtmangiz yuborildi! Examiner qabul qilishini kuting.")
     await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
- 
+
     text = (
         f"🔔 <b>Yangi imtihon buyurtmasi</b>\n\n"
         f"Ustoz: {user['full_name']}\n"
@@ -656,7 +445,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
         f"O'quvchilar soni: {data['students_count']}"
         + _custom_fields_block(data)
     )
- 
+
     examiners = await db.get_examiners_by_branch(data["branch"])
     for ex in examiners:
         try:
@@ -666,7 +455,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
             await db.add_notification(booking_id, sent.chat.id, sent.message_id)
         except Exception:
             pass
- 
+
     admin_group_id = await db.get_setting("admin_group_id")
     if admin_group_id:
         try:
@@ -674,7 +463,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
             await db.add_notification(booking_id, sent.chat.id, sent.message_id)
         except Exception:
             pass
- 
+
     # END OF COURSE / MIDTERM buyurtmalari filialdan qat'iy nazar
     # o'quv bo'lim rahbariga ham yetkaziladi
     if data["test_type"].strip().upper() in ("END OF COURSE", "MIDTERM"):
@@ -685,10 +474,10 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext):
                 await db.add_notification(booking_id, sent.chat.id, sent.message_id)
             except Exception:
                 pass
- 
+
     await callback.answer()
- 
- 
+
+
 @router.callback_query(F.data.startswith("accept_booking:"))
 async def accept_booking_handler(callback: CallbackQuery):
     booking_id = int(callback.data.split(":")[1])
@@ -696,14 +485,14 @@ async def accept_booking_handler(callback: CallbackQuery):
     if not booking:
         await callback.answer("Buyurtma topilmadi.", show_alert=True)
         return
- 
+
     if booking["status"] != "pending":
         msg = "Kechirasiz, bu buyurtma allaqachon band qilingan."
         if booking["examiner_name"]:
             msg = f"Kechirasiz, bu buyurtmani allaqachon {booking['examiner_name']} qabul qilgan."
         await callback.answer(msg, show_alert=True)
         return
- 
+
     # Tezkor (do'stona) tekshiruv — aniq javob esa pastdagi bo'linmas UPDATE'dan keladi.
     conflict = await db.examiner_has_conflict(
         callback.from_user.id, booking["exam_date"], booking["exam_time"]
@@ -715,9 +504,9 @@ async def accept_booking_handler(callback: CallbackQuery):
             show_alert=True,
         )
         return
- 
+
     examiner = await db.get_user(callback.from_user.id)
- 
+
     # YUMSHOQ KONFLIKT: examinerda shu kuni, BOSHQA filialda, 1soat 20daqiqadan
     # kam farq bilan imtihon bor — to'g'ridan-to'g'ri biriktirmasdan, avval
     # ustozdan vaqtni kechiktirishga rozimisiz deb so'raymiz.
@@ -732,11 +521,11 @@ async def accept_booking_handler(callback: CallbackQuery):
         if not saved:
             await callback.answer("Kechirasiz, bu buyurtma allaqachon band qilingan.", show_alert=True)
             return
- 
+
         await callback.answer(
             "So'rov yuborildi. Ustoz tasdiqlasa, sizga biriktiriladi.", show_alert=True
         )
- 
+
         try:
             await callback.bot.send_message(
                 booking["teacher_telegram_id"],
@@ -748,7 +537,7 @@ async def accept_booking_handler(callback: CallbackQuery):
         except Exception:
             pass
         return
- 
+
     result = await db.accept_booking(
         booking_id, callback.from_user.id, examiner["full_name"],
         booking["exam_date"], booking["exam_time"],
@@ -763,9 +552,9 @@ async def accept_booking_handler(callback: CallbackQuery):
     if result != "ok":
         await callback.answer("Kechirasiz, bu buyurtma allaqachon band qilingan.", show_alert=True)
         return
- 
+
     await callback.answer("Qabul qilindi ✅")
- 
+
     notifications = await db.get_notifications(booking_id)
     for note in notifications:
         try:
@@ -776,7 +565,7 @@ async def accept_booking_handler(callback: CallbackQuery):
             )
         except Exception:
             pass
- 
+
     try:
         await callback.bot.send_message(
             booking["teacher_telegram_id"],
@@ -785,8 +574,8 @@ async def accept_booking_handler(callback: CallbackQuery):
         )
     except Exception:
         pass
- 
- 
+
+
 @router.callback_query(F.data.startswith("resched_yes:"))
 async def reschedule_confirm_yes(callback: CallbackQuery):
     booking_id = int(callback.data.split(":")[1])
@@ -797,11 +586,11 @@ async def reschedule_confirm_yes(callback: CallbackQuery):
     if not booking["pending_examiner_telegram_id"]:
         await callback.answer("Bu so'rov muddati o'tgan yoki allaqachon hal qilingan.", show_alert=True)
         return
- 
+
     examiner_id = booking["pending_examiner_telegram_id"]
     examiner_name = booking["pending_examiner_name"]
     new_time = booking["pending_new_time"]
- 
+
     result = await db.confirm_reschedule(booking_id)
     if result != "ok":
         await callback.answer(
@@ -811,12 +600,12 @@ async def reschedule_confirm_yes(callback: CallbackQuery):
         )
         await db.decline_reschedule(booking_id)
         return
- 
+
     await callback.message.edit_text(
         (callback.message.text or "") + f"\n\n✅ Roziligingiz yuborildi. Yangi vaqt: {new_time}"
     )
     await callback.answer("Tasdiqlandi ✅")
- 
+
     try:
         await callback.bot.send_message(
             examiner_id,
@@ -825,7 +614,7 @@ async def reschedule_confirm_yes(callback: CallbackQuery):
         )
     except Exception:
         pass
- 
+
     notifications = await db.get_notifications(booking_id)
     for note in notifications:
         try:
@@ -836,8 +625,8 @@ async def reschedule_confirm_yes(callback: CallbackQuery):
             )
         except Exception:
             pass
- 
- 
+
+
 @router.callback_query(F.data.startswith("resched_no:"))
 async def reschedule_confirm_no(callback: CallbackQuery):
     booking_id = int(callback.data.split(":")[1])
@@ -845,15 +634,15 @@ async def reschedule_confirm_no(callback: CallbackQuery):
     if not booking or booking["teacher_telegram_id"] != callback.from_user.id:
         await callback.answer("Bu so'rov sizga tegishli emas.", show_alert=True)
         return
- 
+
     examiner_id = booking["pending_examiner_telegram_id"]
     await db.decline_reschedule(booking_id)
- 
+
     await callback.message.edit_text(
         (callback.message.text or "") + "\n\n❌ Rad etdingiz. Boshqa examiner kutilmoqda."
     )
     await callback.answer("Rad etildi")
- 
+
     if examiner_id:
         try:
             await callback.bot.send_message(
@@ -863,12 +652,12 @@ async def reschedule_confirm_no(callback: CallbackQuery):
             )
         except Exception:
             pass
- 
- 
+
+
 # =========================================================
 # OXIRGI BUYURTMANI TAKRORLASH (avval imtihon topshirgan guruh)
 # =========================================================
- 
+
 def _repeat_source_summary(b: dict) -> str:
     test_info = b["test_type"]
     if b.get("test_name"):
@@ -878,22 +667,22 @@ def _repeat_source_summary(b: dict) -> str:
         f"Filial: {b['branch']}\nSana: {b['exam_date']}\nVaqt: {b['exam_time']}\n"
         f"Test turi: {test_info}\nO'quvchilar soni: {b['students_count']}"
     )
- 
- 
+
+
 async def _advance_repeat_queue(answer_func, telegram_id: int, state: FSMContext):
     """Navbatdagi belgilangan maydonni so'raydi; navbat tugasa — yakuniy tasdiqlashni ko'rsatadi."""
     data = await state.get_data()
     queue = list(data.get("repeat_queue", []))
- 
+
     if not queue:
         user = await db.get_user(telegram_id)
         await state.set_state(BookingStates.confirm)
         await answer_func(_booking_summary(user, data), reply_markup=booking_confirm_kb())
         return
- 
+
     field = queue[0]
     await state.update_data(repeat_queue=queue[1:])
- 
+
     if field == "branch":
         user = await db.get_user(telegram_id)
         branches = await db.get_teacher_branches(telegram_id)
@@ -914,25 +703,25 @@ async def _advance_repeat_queue(answer_func, telegram_id: int, state: FSMContext
     elif field == "students_count":
         await state.set_state(BookingStates.repeat_students_count)
         await answer_func("O'quvchilar sonini kiriting:")
- 
- 
+
+
 @router.message(F.text == "🔁 avval imtihon topshirgan guruh")
 async def start_repeat_booking(message: Message, state: FSMContext):
     user = await _is_teacher(message.from_user.id)
     if not user:
         return
- 
+
     await state.set_state(BookingStates.repeat_group_name)
     await message.answer(
         "Avval imtihon topshirgan guruh nomini kiriting (masalan: Step 3 (Vikings)):",
         reply_markup=cancel_kb(),
     )
- 
- 
+
+
 @router.message(BookingStates.repeat_group_name)
 async def get_repeat_group_name(message: Message, state: FSMContext):
     group_name = message.text.strip()
- 
+
     # 1) Avval to'liq mos kelishini tekshiramiz (masalan "Step 3 (Vikings)")
     last = await db.get_last_booking_by_group(message.from_user.id, group_name)
     if last:
@@ -949,7 +738,7 @@ async def get_repeat_group_name(message: Message, state: FSMContext):
             reply_markup=repeat_fields_kb(set()),
         )
         return
- 
+
     # 2) To'liq mos kelmasa — qisman nom bo'yicha qidiramiz (masalan shunchaki "Step 3")
     matches = await db.find_teacher_group_names(message.from_user.id, group_name)
     if not matches:
@@ -958,7 +747,7 @@ async def get_repeat_group_name(message: Message, state: FSMContext):
             "Boshqa nom kiriting yoki bekor qiling:"
         )
         return
- 
+
     if len(matches) == 1:
         last = await db.get_last_booking_by_group(message.from_user.id, matches[0])
         await state.update_data(
@@ -974,15 +763,15 @@ async def get_repeat_group_name(message: Message, state: FSMContext):
             reply_markup=repeat_fields_kb(set()),
         )
         return
- 
+
     # 3) Bir nechta mos guruh topilsa — tanlash uchun tugmalar chiqaramiz
     await state.update_data(repeat_group_matches=matches)
     await message.answer(
         "Bir nechta mos guruh topildi, kerakligini tanlang:",
         reply_markup=repeat_group_match_kb(matches),
     )
- 
- 
+
+
 @router.callback_query(BookingStates.repeat_group_name, F.data.startswith("repeatgroup:"))
 async def choose_repeat_group_match(callback: CallbackQuery, state: FSMContext):
     idx = int(callback.data.split(":", 1)[1])
@@ -991,12 +780,12 @@ async def choose_repeat_group_match(callback: CallbackQuery, state: FSMContext):
     if idx >= len(matches):
         await callback.answer("Xatolik yuz berdi, qaytadan urinib ko'ring.", show_alert=True)
         return
- 
+
     last = await db.get_last_booking_by_group(callback.from_user.id, matches[idx])
     if not last:
         await callback.answer("Topilmadi.", show_alert=True)
         return
- 
+
     await state.update_data(
         group_name=last["group_name"],
         repeat_source=last,
@@ -1010,8 +799,8 @@ async def choose_repeat_group_match(callback: CallbackQuery, state: FSMContext):
         reply_markup=repeat_fields_kb(set()),
     )
     await callback.answer()
- 
- 
+
+
 @router.callback_query(BookingStates.repeat_fields_select, F.data.startswith("repeat_toggle:"))
 async def toggle_repeat_field(callback: CallbackQuery, state: FSMContext):
     key = callback.data.split(":", 1)[1]
@@ -1024,8 +813,8 @@ async def toggle_repeat_field(callback: CallbackQuery, state: FSMContext):
     await state.update_data(repeat_selected=list(selected))
     await callback.message.edit_reply_markup(reply_markup=repeat_fields_kb(selected))
     await callback.answer()
- 
- 
+
+
 @router.callback_query(BookingStates.repeat_fields_select, F.data == "repeat_cancel")
 async def cancel_repeat_booking(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -1033,14 +822,14 @@ async def cancel_repeat_booking(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("Bekor qilindi.")
     await callback.message.answer("Bosh menyu:", reply_markup=build_main_menu_kb("TEACHER", is_adm))
     await callback.answer()
- 
- 
+
+
 @router.callback_query(BookingStates.repeat_fields_select, F.data == "repeat_start")
 async def repeat_start(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     selected = set(data.get("repeat_selected", []))
     source = data["repeat_source"]
- 
+
     prefill = {}
     if "branch" not in selected:
         prefill["branch"] = source["branch"]
@@ -1053,7 +842,7 @@ async def repeat_start(callback: CallbackQuery, state: FSMContext):
         prefill["test_name"] = source.get("test_name")
     if "students_count" not in selected:
         prefill["students_count"] = source["students_count"]
- 
+
     fields = await db.get_booking_fields()
     source_values = await db.get_booking_field_values(source["id"])
     prefill["custom_field_answers"] = {
@@ -1061,15 +850,15 @@ async def repeat_start(callback: CallbackQuery, state: FSMContext):
         for f in fields if f["field_key"] in source_values
     }
     prefill["custom_field_labels"] = {f["field_key"]: f["label"] for f in fields}
- 
+
     queue = [f for f in REPEAT_FIELD_ORDER if f in selected]
     await state.update_data(**prefill, repeat_queue=queue)
- 
+
     await callback.message.edit_text("Davom etilmoqda... ⏳")
     await callback.answer()
     await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
- 
- 
+
+
 @router.callback_query(BookingStates.repeat_branch, F.data.startswith("bookbranch:"))
 async def choose_repeat_branch(callback: CallbackQuery, state: FSMContext):
     branch = callback.data.split(":", 1)[1]
@@ -1077,8 +866,8 @@ async def choose_repeat_branch(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(f"Filial: {branch} ✅")
     await callback.answer()
     await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
- 
- 
+
+
 @router.message(BookingStates.repeat_exam_date)
 async def get_repeat_exam_date(message: Message, state: FSMContext):
     try:
@@ -1088,8 +877,8 @@ async def get_repeat_exam_date(message: Message, state: FSMContext):
         return
     await state.update_data(exam_date=message.text.strip())
     await _advance_repeat_queue(message.answer, message.from_user.id, state)
- 
- 
+
+
 @router.message(BookingStates.repeat_exam_time)
 async def get_repeat_exam_time(message: Message, state: FSMContext):
     try:
@@ -1099,8 +888,8 @@ async def get_repeat_exam_time(message: Message, state: FSMContext):
         return
     await state.update_data(exam_time=message.text.strip())
     await _advance_repeat_queue(message.answer, message.from_user.id, state)
- 
- 
+
+
 @router.callback_query(BookingStates.repeat_test_type, F.data.startswith("booking_type:"))
 async def get_repeat_test_type(callback: CallbackQuery, state: FSMContext):
     test_type = callback.data.split(":", 1)[1]
@@ -1115,14 +904,14 @@ async def get_repeat_test_type(callback: CallbackQuery, state: FSMContext):
         await _advance_repeat_queue(callback.message.answer, callback.from_user.id, state)
         return
     await callback.answer()
- 
- 
+
+
 @router.message(BookingStates.repeat_unit_name)
 async def get_repeat_unit_name(message: Message, state: FSMContext):
     await state.update_data(test_name=message.text.strip())
     await _advance_repeat_queue(message.answer, message.from_user.id, state)
- 
- 
+
+
 @router.message(BookingStates.repeat_students_count)
 async def get_repeat_students_count(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
@@ -1130,4 +919,3 @@ async def get_repeat_students_count(message: Message, state: FSMContext):
         return
     await state.update_data(students_count=int(message.text.strip()))
     await _advance_repeat_queue(message.answer, message.from_user.id, state)
- 
