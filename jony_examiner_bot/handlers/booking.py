@@ -568,6 +568,52 @@ async def accept_booking_handler(callback: CallbackQuery):
             pass
         return
 
+    # IELTS MOCK / CEFR MOCK: examinerda shu kuni shunday imtihon bo'lsa,
+    # u 4 soat davom etadi deb hisoblanadi (filialdan qat'iy nazar). Boshqa
+    # filialdan kelish kerak bo'lsa, taklif qilinadigan vaqtga yana 20 daqiqa qo'shiladi.
+    mock_booking, mock_remaining, mock_needs_travel = await db.examiner_mock_conflict(
+        callback.from_user.id, booking["exam_date"], booking["exam_time"], booking["branch"]
+    )
+    if mock_booking:
+        mock_finish_time = db.add_minutes_to_time(mock_booking["exam_time"], db.MOCK_DURATION_MINUTES)
+        if mock_remaining > db.EOC_NEGOTIATION_WINDOW_MINUTES:
+            await callback.answer(
+                f"Siz hozir {mock_booking['test_type']} imtihonini o'tkazayapsiz, "
+                f"u soat {mock_finish_time} da tugaydi. Bu buyurtmani hozircha "
+                f"qabul qila olmaysiz.",
+                show_alert=True,
+            )
+            return
+
+        proposed_time = mock_finish_time
+        if mock_needs_travel:
+            proposed_time = db.add_minutes_to_time(mock_finish_time, db.MOCK_BRANCH_TRAVEL_BUFFER_MINUTES)
+
+        saved = await db.propose_reschedule(
+            booking_id, callback.from_user.id, examiner["full_name"], proposed_time
+        )
+        if not saved:
+            await callback.answer("Kechirasiz, bu buyurtma allaqachon band qilingan.", show_alert=True)
+            return
+
+        await callback.answer(
+            "So'rov yuborildi. Ustoz tasdiqlasa, sizga biriktiriladi.", show_alert=True
+        )
+
+        travel_note = " (boshqa filialdan kelishga ham vaqt kerak)" if mock_needs_travel else ""
+        try:
+            await callback.bot.send_message(
+                booking["teacher_telegram_id"],
+                f"👋 <b>{examiner['full_name']}</b> imtihoningizni olmoqchi, lekin hozir "
+                f"{mock_booking['test_type']} imtihonini o'tkazayapti va soat "
+                f"<b>{mock_finish_time}</b> da bo'shaydi{travel_note}.\n\n"
+                f"Imtihonni soat <b>{proposed_time}</b> ga ko'chirishga rozimisiz?",
+                reply_markup=reschedule_confirm_kb(booking_id),
+            )
+        except Exception:
+            pass
+        return
+
     # YUMSHOQ KONFLIKT: examinerda shu kuni, BOSHQA filialda, 1soat 20daqiqadan
     # kam farq bilan imtihon bor — to'g'ridan-to'g'ri biriktirmasdan, avval
     # ustozdan vaqtni kechiktirishga rozimisiz deb so'raymiz.
