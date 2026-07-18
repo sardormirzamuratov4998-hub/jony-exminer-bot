@@ -100,10 +100,49 @@ async def check_escalations(bot):
 
 
 async def check_expired_bookings(bot):
-    """Imtihon sanasi o'tib ketgan buyurtmalarni 'expired' deb belgilaydi."""
-    expired_ids = await db.expire_past_bookings()
-    if expired_ids:
-        logger.info(f"{len(expired_ids)} ta buyurtma muddati o'tgani uchun 'expired' qilindi")
+    """Imtihon sanasi o'tib ketgan buyurtmalarni 'expired' deb belgilaydi.
+    Hech kim qabul qilmagan (pending holatda muddati o'tgan) buyurtmalar uchun:
+    - barcha yuborilgan xabarlardagi 'qabul qilish' tugmasi olib tashlanadi
+    - shu filial examinerlariga va admin guruhga jiddiy ogohlantirish yuboriladi."""
+    expired_unaccepted = await db.expire_past_bookings()
+
+    for b in expired_unaccepted:
+        notifications = await db.get_notifications(b["id"])
+        for note in notifications:
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=note["chat_id"], message_id=note["message_id"], reply_markup=None
+                )
+            except Exception:
+                pass
+
+        text = (
+            f"🚨 <b>DIQQAT! IMTIHON VAQTI O'TIB KETDI!</b>\n\n"
+            f"Ustoz: {b['teacher_name']}\n"
+            f"Filial: {b['branch']}\n"
+            f"Sana: {b['exam_date']}\n"
+            f"Vaqt: {b['exam_time']}\n"
+            f"Guruh: {b['group_name']}\n\n"
+            f"❗️Bu imtihonni hech bir examiner qabul qilmadi va belgilangan vaqt "
+            f"allaqachon o'tib ketdi!"
+        )
+
+        examiners = await db.get_examiners_by_branch(b["branch"])
+        for ex in examiners:
+            try:
+                await bot.send_message(ex["telegram_id"], text)
+            except Exception:
+                pass
+
+        admin_group_id = await db.get_setting("admin_group_id")
+        if admin_group_id:
+            try:
+                await bot.send_message(int(admin_group_id), text)
+            except Exception:
+                pass
+
+    if expired_unaccepted:
+        logger.info(f"{len(expired_unaccepted)} ta buyurtma muddati o'tgani uchun 'expired' qilindi")
 
 
 async def send_daily_report(bot):
