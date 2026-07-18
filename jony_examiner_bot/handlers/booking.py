@@ -37,6 +37,18 @@ async def _is_examiner(telegram_id: int):
     return user if user and user["role"] == "EXAMINER" and user["status"] in ("active", "approved") else None
 
 
+def _date_is_past(date_str: str) -> bool:
+    """Kiritilgan sana bugungi kundan oldin bo'lsa True qaytaradi (Toshkent vaqti bo'yicha)."""
+    date_dt = datetime.strptime(date_str, "%d.%m.%Y")
+    return date_dt.date() < db.now_tashkent().date()
+
+
+def _datetime_is_past(date_str: str, time_str: str) -> bool:
+    """Kiritilgan sana+vaqt hozirgi (Toshkent) vaqtdan oldin bo'lsa True qaytaradi."""
+    exam_dt = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
+    return exam_dt < db.now_tashkent()
+
+
 # Foydalanuvchi erkin matn kiritadigan (va shu sabab cancel_kb() ko'rsatiladigan)
 # barcha bosqichlar. Bu handler shu bosqichlardagi maxsus (format tekshiruvchi)
 # handlerlardan OLDIN turishi shart — shuning uchun fayl boshida joylashtirilgan.
@@ -208,6 +220,11 @@ async def reschedule_get_date(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
         return
+    if _date_is_past(message.text.strip()):
+        await message.answer(
+            "O'tib ketgan sana kiritildi. Bugungi yoki kelajakdagi sanani kiriting (masalan: 27.06.2026):"
+        )
+        return
     await state.update_data(new_exam_date=message.text.strip())
     await state.set_state(BookingStates.reschedule_time)
     await message.answer("Yangi vaqtni kiriting (masalan: 08:00):")
@@ -225,6 +242,12 @@ async def reschedule_get_time(message: Message, state: FSMContext):
     data = await state.get_data()
     booking_id = data.get("reschedule_booking_id")
     new_date = data.get("new_exam_date")
+
+    if _datetime_is_past(new_date, new_time):
+        await message.answer(
+            "Bu vaqt allaqachon o'tib ketgan. Hozirgi vaqtdan keyingi vaqtni kiriting (masalan: 08:00):"
+        )
+        return
 
     booking = await db.get_booking(booking_id)
     if not booking or booking["status"] not in ("pending", "accepted"):
@@ -311,6 +334,11 @@ async def get_exam_date(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
         return
+    if _date_is_past(message.text.strip()):
+        await message.answer(
+            "O'tib ketgan sana kiritildi. Bugungi yoki kelajakdagi sanani kiriting (masalan: 27.06.2026):"
+        )
+        return
     await state.update_data(exam_date=message.text.strip())
     await state.set_state(BookingStates.exam_time)
     await message.answer("Imtihon vaqtini kiriting (masalan: 08:00):")
@@ -322,6 +350,12 @@ async def get_exam_time(message: Message, state: FSMContext):
         datetime.strptime(message.text.strip(), "%H:%M")
     except ValueError:
         await message.answer("Noto'g'ri format. Masalan: 08:00 shaklida kiriting:")
+        return
+    data = await state.get_data()
+    if _datetime_is_past(data["exam_date"], message.text.strip()):
+        await message.answer(
+            "Bu vaqt allaqachon o'tib ketgan. Hozirgi vaqtdan keyingi vaqtni kiriting (masalan: 08:00):"
+        )
         return
     await state.update_data(exam_time=message.text.strip())
     await state.set_state(BookingStates.test_type)
@@ -982,6 +1016,11 @@ async def get_repeat_exam_date(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
         return
+    if _date_is_past(message.text.strip()):
+        await message.answer(
+            "O'tib ketgan sana kiritildi. Bugungi yoki kelajakdagi sanani kiriting (masalan: 27.06.2026):"
+        )
+        return
     await state.update_data(exam_date=message.text.strip())
     await _advance_repeat_queue(message.answer, message.from_user.id, state)
 
@@ -992,6 +1031,12 @@ async def get_repeat_exam_time(message: Message, state: FSMContext):
         datetime.strptime(message.text.strip(), "%H:%M")
     except ValueError:
         await message.answer("Noto'g'ri format. Masalan: 08:00 shaklida kiriting:")
+        return
+    data = await state.get_data()
+    if _datetime_is_past(data["exam_date"], message.text.strip()):
+        await message.answer(
+            "Bu vaqt allaqachon o'tib ketgan. Hozirgi vaqtdan keyingi vaqtni kiriting (masalan: 08:00):"
+        )
         return
     await state.update_data(exam_time=message.text.strip())
     await _advance_repeat_queue(message.answer, message.from_user.id, state)
@@ -1105,6 +1150,11 @@ async def postpone_get_new_date(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Noto'g'ri format. Masalan: 27.06.2026 shaklida kiriting:")
         return
+    if _date_is_past(message.text.strip()):
+        await message.answer(
+            "O'tib ketgan sana kiritildi. Bugungi yoki kelajakdagi sanani kiriting (masalan: 27.06.2026):"
+        )
+        return
     await state.update_data(postpone_new_date=message.text.strip())
     await state.set_state(PostponeStates.new_time)
     await message.answer("Surish mumkin bo'lgan vaqtni kiriting (masalan: 08:00):")
@@ -1123,6 +1173,12 @@ async def postpone_get_new_time(message: Message, state: FSMContext):
     booking_id = data.get("postpone_booking_id")
     reason = data.get("postpone_reason")
     new_date = data.get("postpone_new_date")
+
+    if _datetime_is_past(new_date, new_time):
+        await message.answer(
+            "Bu vaqt allaqachon o'tib ketgan. Hozirgi vaqtdan keyingi vaqtni kiriting (masalan: 08:00):"
+        )
+        return
 
     booking = await db.get_booking(booking_id)
     if (
