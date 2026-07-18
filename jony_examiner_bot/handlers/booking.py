@@ -496,6 +496,17 @@ async def accept_booking_handler(callback: CallbackQuery):
         await callback.answer("Buyurtma topilmadi.", show_alert=True)
         return
 
+    if booking["status"] == "expired":
+        await callback.answer(
+            "Kechirasiz, bu imtihonning vaqti allaqachon o'tib ketgan. Uni endi qabul qilib bo'lmaydi.",
+            show_alert=True,
+        )
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
     if booking["status"] != "pending":
         msg = "Kechirasiz, bu buyurtma allaqachon band qilingan."
         if booking["examiner_name"]:
