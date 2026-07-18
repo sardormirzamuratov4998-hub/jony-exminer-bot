@@ -1218,7 +1218,7 @@ async def postpone_confirm_no(callback: CallbackQuery):
         + f"\nGuruh: {booking['group_name']}\n"
         f"O'quvchilar soni: {booking['students_count']}"
     )
-    examiners = await db.get_all_active_examiners()
+    examiners = await db.get_examiners_by_branch(booking["branch"])
     for ex in examiners:
         if ex["telegram_id"] == examiner_id:
             continue
