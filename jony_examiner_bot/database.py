@@ -912,6 +912,40 @@ EOC_TEST_TYPES = ("END OF COURSE", "MIDTERM")
 EOC_DURATION_MINUTES = 120       # END OF COURSE / MIDTERM 2 soat davom etadi deb hisoblanadi
 EOC_NEGOTIATION_WINDOW_MINUTES = 60  # tugashiga shu daqiqadan kam qolgan bo'lsa — so'rov yuboriladi
 
+MOCK_TEST_TYPES = ("IELTS MOCK", "CEFR MOCK")
+MOCK_DURATION_MINUTES = 240      # IELTS MOCK / CEFR MOCK har biri 4 soat davom etadi deb hisoblanadi
+MOCK_BRANCH_TRAVEL_BUFFER_MINUTES = 20  # boshqa filialdan kelish uchun qo'shimcha vaqt
+
+
+async def examiner_mock_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str, branch: str):
+    """Examinerning shu kuni qabul qilingan IELTS MOCK / CEFR MOCK imtihoni bo'lsa
+    (filialdan qat'iy nazar — har biri 4 soat davom etadi deb hisoblanadi) va
+    yangi buyurtma vaqti o'sha 4 soatlik oraliqqa to'g'ri kelib qolsa, tegishli
+    buyurtmani, imtihon tugashigacha necha daqiqa qolganini va yangi buyurtma
+    BOSHQA filialda bo'lgani uchun qo'shimcha yo'l vaqti kerakligini qaytaradi.
+    Natija: (conflicting_booking, remaining_minutes, needs_travel_buffer) yoki (None, None, None)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" for _ in MOCK_TEST_TYPES)
+        cur = await db.execute(
+            f"""SELECT * FROM bookings
+                WHERE examiner_telegram_id=? AND exam_date=? AND status='accepted'
+                AND test_type IN ({placeholders})""",
+            (examiner_telegram_id, exam_date, *MOCK_TEST_TYPES),
+        )
+        rows = await cur.fetchall()
+
+    new_dt = datetime.strptime(exam_time, "%H:%M")
+    for row in rows:
+        b = dict(row)
+        start_dt = datetime.strptime(b["exam_time"], "%H:%M")
+        finish_dt = start_dt + timedelta(minutes=MOCK_DURATION_MINUTES)
+        if start_dt <= new_dt < finish_dt:
+            remaining = int((finish_dt - new_dt).total_seconds() // 60)
+            needs_travel_buffer = b["branch"] != branch
+            return b, remaining, needs_travel_buffer
+    return None, None, None
+
 
 async def examiner_eoc_conflict(examiner_telegram_id: int, exam_date: str, exam_time: str):
     """Examinerning shu kuni qabul qilingan END OF COURSE / MIDTERM imtihoni bo'lsa
