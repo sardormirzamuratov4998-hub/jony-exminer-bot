@@ -1242,13 +1242,17 @@ async def reschedule_booking(booking_id: int, exam_date: str, exam_time: str,
 
 async def expire_past_bookings():
     """Imtihon sanasi+vaqti o'tib ketgan, hali pending/accepted holatidagi
-    buyurtmalarni 'expired' deb belgilaydi."""
+    buyurtmalarni 'expired' deb belgilaydi.
+    Qaytaradi: hech kim qabul qilmagan (muddati o'tganda hali 'pending' bo'lgan)
+    buyurtmalarning to'liq ma'lumotlari — chaqiruvchi shular uchun 'qabul qilish'
+    tugmasini olib tashlab, jiddiy ogohlantirish yuborishi kerak."""
     now = now_tashkent()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("SELECT * FROM bookings WHERE status IN ('pending','accepted')")
         rows = await cur.fetchall()
         expired_ids = []
+        expired_unaccepted = []
         for r in rows:
             d = dict(r)
             try:
@@ -1257,10 +1261,12 @@ async def expire_past_bookings():
                 continue
             if exam_dt < now:
                 expired_ids.append(d["id"])
+                if d["status"] == "pending":
+                    expired_unaccepted.append(d)
         for bid in expired_ids:
             await db.execute("UPDATE bookings SET status='expired' WHERE id=?", (bid,))
         await db.commit()
-        return expired_ids
+        return expired_unaccepted
 
 
 async def get_daily_report(date_str: str):
